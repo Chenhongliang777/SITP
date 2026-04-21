@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 微博足球舆情采集器（Playwright 版）
 基于 Playwright + 已保存登录态，稳定采集微博搜索数据
@@ -9,7 +8,8 @@ import json
 import random
 import urllib.parse
 import argparse
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional
 from playwright.async_api import async_playwright, Page
@@ -190,25 +190,51 @@ class WeiboCollector:
             return False
 
         return has_football
+    
+    
 
     async def _extract_time(self, el) -> str:
         selectors = [
             'a[node-type="feed_list_item_date"]',
             '.from a',
-            '[class*="time"]',
-            'a[href*="/status/"]'
+            '[class*="time"]'
         ]
+        raw_time = ""
         for sel in selectors:
             try:
                 time_el = el.locator(sel).first
                 if await time_el.count() > 0:
-                    text = await time_el.inner_text(timeout=1000)
-                    if text and text.strip():
-                        return text.strip()
+                    raw_time = await time_el.inner_text(timeout=1000)
+                    if raw_time:
+                        break
             except:
                 continue
-        return ""
-
+    
+        if not raw_time:
+            return ""
+    
+        now = datetime.now()
+    
+        # "32秒前"
+        m = re.search(r'(\d+)\s*秒前', raw_time)
+        if m:
+            dt = now - timedelta(seconds=int(m.group(1)))
+            return dt.strftime("%m月%d日 %H:%M")
+    
+        # "5分钟前"
+        m = re.search(r'(\d+)\s*分钟前', raw_time)
+        if m:
+            dt = now - timedelta(minutes=int(m.group(1)))
+            return dt.strftime("%m月%d日 %H:%M")
+    
+        # "今天19:33"
+        m = re.search(r'今天\s*(\d{1,2}):(\d{2})', raw_time)
+        if m:
+            return now.strftime("%m月%d日") + f" {m.group(1).zfill(2)}:{m.group(2)}"
+    
+        # 标准格式直接返回
+        return raw_time.strip()
+   
     async def _extract_username(self, el) -> str:
         selectors = [
             'a.name',
