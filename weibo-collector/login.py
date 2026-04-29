@@ -5,7 +5,7 @@ from playwright.async_api import async_playwright
 
 # 自动定位到项目根目录（不再写死 C 盘）
 SCRIPT_DIR = Path(__file__).parent.resolve()
-PROJECT_DIR = SCRIPT_DIR.parent
+PROJECT_DIR = SCRIPT_DIR
 STATE_FILE = PROJECT_DIR / "data" / "weibo_auth.json"
 
 async def save_login_state():
