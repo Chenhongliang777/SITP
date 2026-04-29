@@ -3,25 +3,44 @@
 
 ## 1. 项目结构
 project_root/
-├── login.py                  # 登录工具：获取并保存微博 Cookies
-├── collector_backend.py      # 数据采集后端：基于 Playwright 的多链路抓取
-├── launcher.py               # **流水线统一启动器**（核心入口）
-├── time_cleaner.py           # 时间清洗：解析相对时间并过滤日期范围
-├── deduper.py                # 去重：按 mid 和文本前缀去重
-├── semantic_filter.py        # 语义过滤：基于 sentence‑transformers + LLM 的回退，过滤非足球内容
-├── sentiment_model.py        # 情感分析：预训练模型（5 级情感）+ LLM 回退
-├── topic_cluster.py          # 主题聚类：TF‑IDF + K‑Means + LLM 生成主题标签
-├── absa_extractor.py         # 方面级情感抽取 (ABSA)：LLM 主路径 + 规则回退
-├── risk_scanner.py           # 风险扫描：LLM 语义动态判定风险类别与等级
-├── warner_score.py           # 预警评分：密度制加权评分，输出风险等级
-├── report_html.py            # HTML 报告生成：可视化仪表板 + LLM 研判摘要 + 分级处置建议
-├── embedder.py               # 工具库：Embedding 封装（远端 API + 本地哈希回退）
-├── llm_client.py             # 工具库：LLM 调用封装（兼容 OpenAI 风格 API）
-├── requirements.txt          # Python 依赖清单
-├── .env.example              # 环境变量模板（需要自行创建 .env 文件）
-├── data/                     # 运行产物存放目录（各类 JSON 和 HTML 文件）
-├── reports/                  # 最终 HTML 报告输出目录
-└── logs/                     # 采集日志目录
+├── login.py
+│   # 登录工具：获取并保存微博 Cookies
+├── collector_backend.py
+│   # 数据采集后端：基于 Playwright 的多链路抓取
+├── launcher.py
+│   # 流水线统一启动器（核心入口）
+├── time_cleaner.py
+│   # 时间清洗：解析相对时间并过滤日期范围
+├── deduper.py
+│   # 去重：按 mid 和文本前缀去重
+├── semantic_filter.py
+│   # 语义过滤：基于 sentence-transformers + LLM 的回退，过滤非足球内容
+├── sentiment_model.py
+│   # 情感分析：预训练模型（5 级情感）+ LLM 回退
+├── topic_cluster.py
+│   # 主题聚类：TF-IDF + K-Means + LLM 生成主题标签
+├── absa_extractor.py
+│   # 方面级情感抽取 (ABSA)：LLM 主路径 + 规则回退
+├── risk_scanner.py
+│   # 风险扫描：LLM 语义动态判定风险类别与等级
+├── warner_score.py
+│   # 预警评分：密度制加权评分，输出风险等级
+├── report_html.py
+│   # HTML 报告生成：可视化仪表板 + LLM 研判摘要 + 分级处置建议
+├── embedder.py
+│   # 工具库：Embedding 封装（远端 API + 本地哈希回退）
+├── llm_client.py
+│   # 工具库：LLM 调用封装（兼容 OpenAI 风格 API）
+├── requirements.txt
+│   # Python 依赖清单
+├── .env.example
+│   # 环境变量模板（需要自行创建 .env 文件）
+├── data/
+│   # 运行产物存放目录（各类 JSON 和 HTML 文件）
+├── reports/
+│   # 最终 HTML 报告输出目录
+└── logs/
+    # 采集日志目录
 
 ## 2. 环境与依赖
 ### 2.1 Python 3.10+
