@@ -1,0 +1,30 @@
+{
+  "meta": {
+    "keyword": "中超",
+    "date_range": "2026-04-28 to 2026-04-29",
+    "actual": 1,
+    "topic_count": 1,
+    "llm_called": 1,
+    "llm_failed": 0,
+    "use_llm_labels": true
+  },
+  "data": [
+    {
+      "mid": "5293145285725190",
+      "raw_text": "\n                    总说中超没速度  下半场强强死磕，全程高能停不下来！ <a href=\"http://t.cn/AXJwiDVQ\" target=\"_blank\"><i class=\"wbicon\">L</i>小桃爱踢球的微博视频</a> ​                ",
+      "clean_text": "总说中超没速度 下半场强强死磕，全程高能停不下来！ L小桃爱踢球",
+      "source_backend": "dom_fallback",
+      "username": "体育大表哥迈克",
+      "crawl_time": "2026-05-05T22:42:44.901000",
+      "parsed_time": "2026-04-29 21:00:00",
+      "relevance_confidence": 0.9,
+      "football_related": true,
+      "rejection_reason": "LLM 判定: 提及中超联赛，属于足球舆情 (pos=0.552, neg=0.423, score=0.552)",
+      "sentiment": "强烈负面",
+      "sentiment_confidence": 0.7754,
+      "method": "pretrained_model",
+      "topic_id": 0,
+      "topic_label": "比赛节奏"
+    }
+  ]
+}

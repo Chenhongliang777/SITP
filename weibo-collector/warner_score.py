@@ -43,15 +43,7 @@ def category_weight(category: str) -> int:
     return 0
 
 
-def main():
-    parser = argparse.ArgumentParser(description="预警评分脚本（密度制，与采集总量无关）")
-    parser.add_argument("--input", required=True, help="上游 risk JSON 文件")
-    args = parser.parse_args()
-
-    input_path = Path(args.input)
-    if not input_path.exists():
-        raise SystemExit(f"未找到输入文件: {input_path}")
-
+def run_warner(input_path: Path) -> Path:
     with open(input_path, "r", encoding="utf-8") as f:
         payload = json.load(f)
 
@@ -153,6 +145,9 @@ def main():
     trend = build_trend(total_score, high_count, dominant_cat)
 
     # ---------- 5. 输出 ----------
+    neg_total = extreme_neg_count + slight_neg_count
+    negative_rate = round(neg_total / total, 4) if total else 0.0
+
     output = {
         "meta": {
             "keyword": keyword,
@@ -162,7 +157,8 @@ def main():
             "medium_risk_count": medium_count,
             "low_risk_count": low_count,
             "extreme_negative_count": extreme_neg_count,
-            "negative_count": extreme_neg_count + slight_neg_count,
+            "negative_count": neg_total,
+            "negative_rate": negative_rate,
         },
         "total_score": round(total_score, 2),
         "risk_level": risk_level,
@@ -185,6 +181,19 @@ def main():
     print(f"预警评分完成，总分 {total_score:.2f}，等级 {risk_level}")
     print(f"主导风险: {dominant_cat} ({dominant_count}/{total}, {concentration_ratio:.1%})")
     print(f"结果已写入: {output_path}")
+    return output_path
+
+
+def main():
+    parser = argparse.ArgumentParser(description="预警评分脚本（密度制，与采集总量无关）")
+    parser.add_argument("--input", required=True, help="上游 risk JSON 文件")
+    args = parser.parse_args()
+
+    input_path = Path(args.input)
+    if not input_path.exists():
+        raise SystemExit(f"未找到输入文件: {input_path}")
+
+    run_warner(input_path)
 
 
 if __name__ == "__main__":

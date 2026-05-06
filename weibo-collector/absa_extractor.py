@@ -1,25 +1,18 @@
 import argparse
 import json
-import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-import requests
-from dotenv import load_dotenv
+from utils.llm_client import try_llm_client
+from utils.runtime import get_llm_batch_size, get_llm_max_workers
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DATA_DIR = SCRIPT_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-ENV_PATH = SCRIPT_DIR / ".env"
-if ENV_PATH.exists():
-    load_dotenv(dotenv_path=ENV_PATH)
-
-DS_KEY = os.getenv("DEEPSEEK_API_KEY")
-DS_URL = os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions")
-
-# ---------- 改进的规则法词典（回退用） ----------
 ASPECT_KEYWORDS = [
     "裁判", "VAR", "球员", "球队", "教练", "门将", "俱乐部", "赛程", "青训",
     "中超", "国足", "主教练", "球迷", "转会", "战术", "比赛", "足协", "德比",
@@ -54,16 +47,12 @@ def build_output_path(keyword: str):
 
 
 def simple_sentiment(text: str):
-    """改进版规则情感判定：带否定检测"""
     text = text or ""
     neg_count = sum(text.count(w) for w in NEGATIVE_INDICATORS)
     pos_count = sum(text.count(w) for w in POSITIVE_INDICATORS)
 
-    # 否定翻转：句中出现"不""没"等，大概率翻转情感
     denial = any(w in text for w in DENIAL_WORDS)
     if denial:
-        # 简单处理：如果原先是 positive，翻成 negative；反之亦然
-        # 这里采用更保守策略：否定词削弱正面，增强负面
         if pos_count > 0:
             pos_count *= 0.3
 
@@ -75,22 +64,18 @@ def simple_sentiment(text: str):
 
 
 def extract_aspects_rule(text: str):
-    """改进的规则法：提取关键词 + 简单人名识别"""
     aspects = []
     if not text:
         return aspects
 
-    # 1. 提取 jieba 人名（nr）作为潜在 target
     try:
         import jieba.posseg as pseg
         for word, flag in pseg.lcut(text):
             if flag == "nr" and len(word) >= 2:
-                # 只保留常见足球人名（2~4字中文人名）
                 aspects.append({"target": word, "sentiment": simple_sentiment(text)})
     except Exception:
         pass
 
-    # 2. 按句子匹配关键词
     sentences = re.split(r'[。！？!?\n]', text)
     for sentence in sentences:
         sentence = sentence.strip()
@@ -101,7 +86,6 @@ def extract_aspects_rule(text: str):
                 sentiment = simple_sentiment(sentence)
                 aspects.append({"target": keyword, "sentiment": sentiment})
 
-    # 3. 去重：同 target 同 sentiment 只保留一次
     unique = []
     seen = set()
     for item in aspects:
@@ -112,11 +96,30 @@ def extract_aspects_rule(text: str):
     return unique
 
 
-def extract_aspects_llm(text: str):
-    """LLM 精确抽取：能识别人名、复杂情感、转折句"""
-    if not DS_KEY:
-        return None
+def _normalize_aspect_sentiment(s: str) -> str:
+    s = (s or "").lower().strip()
+    if s in ("positive", "pos", "正面"):
+        return "positive"
+    if s in ("negative", "neg", "负面"):
+        return "negative"
+    return "neutral"
 
+
+def _sanitize_aspects(raw: Any) -> List[Dict[str, Any]]:
+    if not isinstance(raw, list):
+        return []
+    out: List[Dict[str, Any]] = []
+    for it in raw:
+        if not isinstance(it, dict):
+            continue
+        t = str(it.get("target", "")).strip()
+        if not t:
+            continue
+        out.append({"target": t[:80], "sentiment": _normalize_aspect_sentiment(str(it.get("sentiment", "neutral")))})
+    return out
+
+
+def extract_aspects_llm(text: str, client) -> Optional[List[Dict[str, Any]]]:
     system_prompt = (
         "你是一个中文足球微博方面级情感分析(ABSA)专家。"
         "请从给定文本中提取所有'评价对象(target)+情感(sentiment)'对。"
@@ -130,88 +133,139 @@ def extract_aspects_llm(text: str):
         '输出：[{"target": "武磊", "sentiment": "negative"}, {"target": "裁判", "sentiment": "negative"}]'
     )
 
-    try:
-        resp = requests.post(
-            DS_URL,
-            headers={"Authorization": f"Bearer {DS_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": "deepseek-chat",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"文本：{text}\n输出："},
-                ],
-                "temperature": 0.0,
-                "max_tokens": 200,
-                "response_format": {"type": "json_object"},
-            },
-            timeout=25,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        if not content:
-            return None
-
-        # LLM 可能直接返回数组，也可能包在 {"aspects": [...]} 里，做兼容
-        parsed = json.loads(content)
-        if isinstance(parsed, list):
-            return parsed
-        if isinstance(parsed, dict):
-            for k in ["aspects", "result", "data", "items"]:
-                if k in parsed and isinstance(parsed[k], list):
-                    return parsed[k]
-            # 如果 dict 里只有一个 list 值
-            for v in parsed.values():
-                if isinstance(v, list):
-                    return v
-        return None
-    except Exception:
+    parsed = client.chat_json(
+        system_prompt,
+        f"文本：{text}\n输出：",
+        temperature=0.0,
+        max_tokens=200,
+        response_format={"type": "json_object"},
+    )
+    if parsed is None:
         return None
 
+    if isinstance(parsed, list):
+        return _sanitize_aspects(parsed)
+    if isinstance(parsed, dict):
+        for k in ["aspects", "result", "data", "items"]:
+            if k in parsed and isinstance(parsed[k], list):
+                return _sanitize_aspects(parsed[k])
+        for v in parsed.values():
+            if isinstance(v, list):
+                return _sanitize_aspects(v)
+    return None
 
-def extract_aspects(text: str):
-    """主路径：LLM；回退：规则法"""
-    result = None
-    if DS_KEY:
-        result = extract_aspects_llm(text)
-    if result is None:
-        result = extract_aspects_rule(text)
-    # 保证返回 list
-    return result if isinstance(result, list) else []
+
+def extract_aspects_llm_batch(batch: List[Tuple[int, str]], client, max_text_len: int = 380) -> Optional[Dict[int, List[Dict[str, Any]]]]:
+    """
+    一批多条共一次 LLM。输入为 (全局下标, 文本) 列表；成功返回 {下标: aspects 列表}；失败返回 None。
+    """
+    if not batch:
+        return {}
+    lines = []
+    for i, t in batch:
+        t2 = (t or "")[:max_text_len].replace("\n", " ").replace("\r", "")
+        lines.append(f"[{i}] {t2}")
+    block = "\n".join(lines)
+    system_prompt = (
+        "你是中文足球微博 ABSA 专家。输入多行，每行格式为「[整数id] 微博正文」。"
+        "请为每个 id 分别抽取方面级情感。输出一个 JSON 对象，仅含字段 results："
+        "results 为数组，每项必须含 id（与输入相同的整数）和 aspects（数组，"
+        "元素为 {target, sentiment}，sentiment 只能是 positive / negative / neutral）。"
+        "某条无方面可 aspects 为空数组。必须覆盖输入中的每一个 id，不要遗漏。"
+    )
+    max_tokens = min(4096, 120 + 90 * len(batch))
+    parsed = client.chat_json(
+        system_prompt,
+        f"待分析：\n{block}\n",
+        temperature=0.0,
+        max_tokens=max_tokens,
+        response_format={"type": "json_object"},
+    )
+    if not isinstance(parsed, dict):
+        return None
+    arr = parsed.get("results")
+    if not isinstance(arr, list):
+        return None
+    out: Dict[int, List[Dict[str, Any]]] = {}
+    for item in arr:
+        if not isinstance(item, dict):
+            continue
+        try:
+            idx = int(item.get("id"))
+        except (TypeError, ValueError):
+            continue
+        aspects = _sanitize_aspects(item.get("aspects"))
+        out[idx] = aspects
+    expected = {i for i, _ in batch}
+    if expected != set(out.keys()):
+        return None
+    return out
 
 
-def main():
-    parser = argparse.ArgumentParser(description="方面级情感抽取脚本（LLM 主路径 + 规则法回退）")
-    parser.add_argument("--input", required=True, help="上游 topic JSON 文件")
-    args = parser.parse_args()
+def _absa_batch_recursive(
+    batch: List[Tuple[int, str]], client, depth: int
+) -> Dict[int, List[Dict[str, Any]]]:
+    """批量失败则二分；单条走原 extract_aspects_llm；仍失败用规则。"""
+    if not batch:
+        return {}
+    if len(batch) == 1:
+        idx, text = batch[0]
+        llm = extract_aspects_llm(text, client)
+        if llm is not None:
+            return {idx: llm}
+        return {idx: extract_aspects_rule(text)}
 
-    input_path = Path(args.input)
-    if not input_path.exists():
-        raise SystemExit(f"未找到输入文件: {input_path}")
+    parsed = extract_aspects_llm_batch(batch, client)
+    if parsed is not None:
+        return parsed
 
+    if depth >= 7:
+        return {i: extract_aspects_rule(t) for i, t in batch}
+
+    mid = max(1, len(batch) // 2)
+    a = _absa_batch_recursive(batch[:mid], client, depth + 1)
+    b = _absa_batch_recursive(batch[mid:], client, depth + 1)
+    return {**a, **b}
+
+
+def run_absa(input_path: Path, use_llm: bool) -> Path:
     with open(input_path, "r", encoding="utf-8") as f:
         payload = json.load(f)
 
     keyword = payload.get("meta", {}).get("keyword") or input_path.stem
     posts = payload.get("data", [])
 
-    llm_count = 0
-    rule_count = 0
+    llm_client = try_llm_client() if use_llm else None
 
-    for post in posts:
-        text = (post.get("clean_text") or post.get("raw_text") or "").strip()
-        aspects = extract_aspects(text)
-        post["aspect_sentiments"] = aspects
+    texts = [(post.get("clean_text") or post.get("raw_text") or "").strip() for post in posts]
+    llm_batch_requests = 0
 
-        # 统计路径
-        if DS_KEY and aspects and any(
-            a["target"] not in ASPECT_KEYWORDS and len(a["target"]) >= 2
-            for a in aspects
-        ):
-            # 如果出现了非关键词列表里的具体人名，大概率是 LLM 输出的
-            llm_count += 1
-        else:
-            rule_count += 1
+    if use_llm and llm_client is not None:
+        bs = get_llm_batch_size()
+        chunks: List[List[Tuple[int, str]]] = []
+        for start in range(0, len(posts), bs):
+            chunk = [(start + j, texts[start + j]) for j in range(min(bs, len(posts) - start))]
+            chunks.append(chunk)
+        llm_batch_requests = len(chunks)
+
+        def _process_absa_chunk(ch: List[Tuple[int, str]]) -> Dict[int, List[Dict[str, Any]]]:
+            return _absa_batch_recursive(ch, llm_client, 0)
+
+        workers = min(get_llm_max_workers(), max(1, len(chunks)))
+        merged: Dict[int, List[Dict[str, Any]]] = {}
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for part in ex.map(_process_absa_chunk, chunks):
+                merged.update(part)
+
+        for idx in range(len(posts)):
+            asp = merged.get(idx)
+            if asp is None:
+                posts[idx]["aspect_sentiments"] = extract_aspects_rule(texts[idx])
+            else:
+                posts[idx]["aspect_sentiments"] = asp
+    else:
+        for i, post in enumerate(posts):
+            post["aspect_sentiments"] = extract_aspects_rule(texts[i])
 
     output_path = build_output_path(keyword)
     with open(output_path, "w", encoding="utf-8") as f:
@@ -221,6 +275,10 @@ def main():
                     "keyword": keyword,
                     "date_range": payload.get("meta", {}).get("date_range", ""),
                     "actual": len(posts),
+                    "llm_enabled": bool(use_llm and llm_client is not None),
+                    "llm_batch_size": get_llm_batch_size() if use_llm and llm_client else None,
+                    "llm_max_workers": get_llm_max_workers() if use_llm and llm_client else None,
+                    "llm_batch_requests": llm_batch_requests if use_llm and llm_client else 0,
                 },
                 "data": posts,
             },
@@ -230,8 +288,34 @@ def main():
         )
 
     print(f"方面级情感抽取完成，已写入 {output_path}")
-    if DS_KEY:
-        print(f"LLM 主路径估计覆盖: ~{llm_count} 条，规则回退: ~{rule_count} 条")
+    if use_llm and llm_client:
+        w = min(get_llm_max_workers(), max(1, llm_batch_requests))
+        print(
+            f"LLM 批量：约 {llm_batch_requests} 次顶层批请求（每批最多 {get_llm_batch_size()} 条，"
+            f"顶层并发 {w}，可用环境变量 LLM_MAX_WORKERS 调节）；"
+            "批解析失败时会二分或单条重试，仍失败则用规则。"
+        )
+    else:
+        print("已使用纯规则/jieba 路径。")
+
+    return output_path
+
+
+def main():
+    parser = argparse.ArgumentParser(description="方面级情感抽取（默认 LLM 批量 + 规则兜底；可用 --rule-only 全规则）")
+    parser.add_argument("--input", required=True, help="上游 topic JSON 文件")
+    parser.add_argument(
+        "--rule-only",
+        action="store_true",
+        help="仅使用规则/jieba 抽取，不调用 LLM（更快）",
+    )
+    args = parser.parse_args()
+
+    input_path = Path(args.input)
+    if not input_path.exists():
+        raise SystemExit(f"未找到输入文件: {input_path}")
+
+    run_absa(input_path, use_llm=not args.rule_only)
 
 
 if __name__ == "__main__":

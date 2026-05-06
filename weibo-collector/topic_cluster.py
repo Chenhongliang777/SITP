@@ -1,12 +1,14 @@
 import argparse
 import json
-import os
-import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from typing import List, Tuple
 
-import requests
 from dotenv import load_dotenv
+
+from utils.llm_client import try_llm_client
+from utils.runtime import get_llm_max_workers
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DATA_DIR = SCRIPT_DIR / "data"
@@ -16,9 +18,6 @@ ENV_PATH = SCRIPT_DIR / ".env"
 if ENV_PATH.exists():
     load_dotenv(dotenv_path=ENV_PATH)
 
-DS_KEY = os.getenv("DEEPSEEK_API_KEY")
-DS_URL = os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions")
-
 
 def build_output_path(keyword: str):
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -26,7 +25,6 @@ def build_output_path(keyword: str):
 
 
 def build_keyword_label(vectorizer, kmeans, cluster_id):
-    """LLM 不可用或输出违规时的 fallback：取 TF-IDF 前 2 个词拼接"""
     terms = (
         vectorizer.get_feature_names_out()
         if hasattr(vectorizer, "get_feature_names_out")
@@ -39,34 +37,22 @@ def build_keyword_label(vectorizer, kmeans, cluster_id):
 
 
 def sanitize_label(raw: str) -> str | None:
-    """
-    清洗 LLM 输出：
-    1. 若包含顿号、逗号、斜杠，说明是列举式，只取第一个子串
-    2. 去掉引号、空格
-    3. 长度超过 8 字截断
-    4. 空串返回 None（触发 fallback）
-    """
     if not raw:
         return None
 
-    # 去掉常见标点
     cleaned = raw.strip().replace('"', "").replace("'", "").replace("“", "").replace("”", "")
-    # 若出现列举分隔符，只取第一个主题
     for sep in ["、", "，", ",", "/", "；", ";", "和", "与"]:
         if sep in cleaned:
             cleaned = cleaned.split(sep)[0].strip()
             break
-    # 截断到 8 个字
     cleaned = cleaned[:8]
-    # 若清洗后为空或只剩"主题"等无意义词，返回 None
     if len(cleaned) < 2 or cleaned.startswith("主题"):
         return None
     return cleaned
 
 
-def prompt_llm_topic(samples: list[str]):
-    """调用 LLM 为主题生成单一短标签"""
-    if not DS_KEY or not samples:
+def prompt_llm_topic(samples: list[str], client) -> str | None:
+    if not samples:
         return None
 
     display_samples = samples[:5]
@@ -83,38 +69,16 @@ def prompt_llm_topic(samples: list[str]):
         "正确示例：裁判争议 / 球员表现 / 球迷文化 / 赛程讨论"
     )
 
-    try:
-        resp = requests.post(
-            DS_URL,
-            headers={"Authorization": f"Bearer {DS_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": "deepseek-chat",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"微博内容：\n{content}\n\n主题标签："},
-                ],
-                "temperature": 0.2,
-                "max_tokens": 15,
-            },
-            timeout=20,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        raw_label = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-        return sanitize_label(raw_label)
-    except Exception:
-        return None
+    raw_label = client.chat_text(
+        system_prompt,
+        f"微博内容：\n{content}\n\n主题标签：",
+        temperature=0.2,
+        max_tokens=15,
+    )
+    return sanitize_label(raw_label)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="主题聚类与 LLM 标签生成脚本")
-    parser.add_argument("--input", required=True, help="上游 sentiment JSON 文件")
-    args = parser.parse_args()
-
-    input_path = Path(args.input)
-    if not input_path.exists():
-        raise SystemExit(f"未找到输入文件: {input_path}")
-
+def run_topic_cluster(input_path: Path, use_llm_labels: bool = True) -> Path:
     with open(input_path, "r", encoding="utf-8") as f:
         payload = json.load(f)
 
@@ -127,7 +91,6 @@ def main():
 
     n_posts = len(texts)
 
-    # ---------- 聚类数量：严格 5~8 簇 ----------
     if n_posts >= 40:
         n_clusters = 8
     elif n_posts >= 25:
@@ -149,34 +112,41 @@ def main():
     kmeans = KMeans(n_clusters=n_clusters, random_state=42, n_init=10)
     cluster_ids = kmeans.fit_predict(X)
 
-    # ---------- 按簇聚合 ----------
     cluster_texts = {i: [] for i in range(n_clusters)}
     for text, cid in zip(texts, cluster_ids):
         cluster_texts[cid].append(text)
 
-    # ---------- 生成标签 ----------
+    llm_client = try_llm_client() if use_llm_labels else None
+
     label_map = {}
     llm_called = 0
     llm_failed = 0
 
-    for cid in range(n_clusters):
-        samples = cluster_texts[cid]
-        if not samples:
-            label_map[cid] = f"主题{cid + 1}"
-            continue
+    if llm_client is not None:
 
-        label = None
-        if DS_KEY:
-            llm_called += 1
-            label = prompt_llm_topic(samples)
+        def _resolve_cid(cid: int) -> Tuple[int, str, int, int]:
+            samples = cluster_texts[cid]
+            if not samples:
+                return cid, f"主题{cid + 1}", 0, 0
+            label = prompt_llm_topic(samples, llm_client)
+            if label:
+                return cid, label, 1, 0
+            return cid, build_keyword_label(vectorizer, kmeans, cid), 1, 1
 
-        if not label:
-            llm_failed += 1
-            label = build_keyword_label(vectorizer, kmeans, cid)
+        workers = min(get_llm_max_workers(), max(1, n_clusters))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for cid, label, c, f in pool.map(_resolve_cid, range(n_clusters)):
+                label_map[cid] = label
+                llm_called += c
+                llm_failed += f
+    else:
+        for cid in range(n_clusters):
+            samples = cluster_texts[cid]
+            if not samples:
+                label_map[cid] = f"主题{cid + 1}"
+                continue
+            label_map[cid] = build_keyword_label(vectorizer, kmeans, cid)
 
-        label_map[cid] = label
-
-    # ---------- 写回记录 ----------
     for post, cid in zip(posts, cluster_ids):
         post["topic_id"] = int(cid)
         post["topic_label"] = label_map.get(cid, f"主题{cid + 1}")
@@ -192,8 +162,9 @@ def main():
                     "topic_count": n_clusters,
                     "llm_called": llm_called,
                     "llm_failed": llm_failed,
+                    "use_llm_labels": use_llm_labels,
                 },
-        "data": posts,
+                "data": posts,
             },
             f,
             ensure_ascii=False,
@@ -202,9 +173,30 @@ def main():
 
     unique_labels = set(label_map.values())
     print(f"聚类完成，生成 {n_clusters} 个主题，{len(unique_labels)} 个不同标签。")
-    if llm_called:
-        print(f"LLM 标签生成: {llm_called} 次，失败/清洗回退: {llm_failed} 次。")
+    if use_llm_labels:
+        print(f"LLM 标签: 调用 {llm_called} 次，失败/回退 TF-IDF: {llm_failed} 次。")
+    else:
+        print("已指定 --tfidf-topic-only：全部使用 TF-IDF 关键词标签（无 LLM）。")
     print(f"结果已写入: {output_path}")
+
+    return output_path
+
+
+def main():
+    parser = argparse.ArgumentParser(description="主题聚类与 LLM 标签（默认与旧版一致：有 Key 则调 LLM）")
+    parser.add_argument("--input", required=True, help="上游 sentiment JSON 文件")
+    parser.add_argument(
+        "--tfidf-topic-only",
+        action="store_true",
+        help="仅用 TF-IDF 关键词作簇标签，不调用 LLM（加速）",
+    )
+    args = parser.parse_args()
+
+    input_path = Path(args.input)
+    if not input_path.exists():
+        raise SystemExit(f"未找到输入文件: {input_path}")
+
+    run_topic_cluster(input_path, use_llm_labels=not args.tfidf_topic_only)
 
 
 if __name__ == "__main__":

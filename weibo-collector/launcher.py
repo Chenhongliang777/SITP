@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """
 launcher.py
-足球舆情监测流水线统一启动器
+足球舆情监测流水线统一启动器（含微博登录子命令：python launcher.py login）
 """
 import argparse
+import asyncio
 import json
 import os
 import re
@@ -38,9 +39,9 @@ STEPS = [
         ],
     },
     {
-        "name": "time_cleaner",
-        "script": "time_cleaner.py",
-        "output_prefix": "timecleaned",
+        "name": "preprocess",
+        "script": "preprocess.py",
+        "output_prefix": "deduped",
         "ext": "json",
         "needs_input": True,
         "min_records": 1,
@@ -51,70 +52,21 @@ STEPS = [
         ],
     },
     {
-        "name": "deduper",
-        "script": "deduper.py",
-        "output_prefix": "deduped",
-        "ext": "json",
-        "needs_input": True,
-        "min_records": 1,
-        "build_args": lambda ctx, inp: ["--input", str(inp)],
-    },
-    {
-        "name": "semantic_filter",
-        "script": "semantic_filter.py",
-        "output_prefix": "filtered",
+        "name": "analysis_chain",
+        "script": "analysis_chain.py",
+        "output_prefix": "warning",
         "ext": "json",
         "needs_input": True,
         "min_records": 1,
         "build_args": lambda ctx, inp: [
             "--input", str(inp),
-            *(["--no-llm"] if ctx.no_llm else []),
+            *(["--no-semantic-llm"] if ctx.no_llm else []),
+            *(["--tfidf-topic-only"] if ctx.tfidf_topic_only else []),
+            *(["--rule-risk-only"] if ctx.rule_risk_only else []),
+            *(["--rule-absa"] if ctx.rule_absa else []),
+            *(["--semantic-gray-reject"] if ctx.semantic_gray_reject else []),
+            *(["--no-sentiment-llm-fallback"] if ctx.no_sentiment_llm_fallback else []),
         ],
-    },
-    {
-        "name": "sentiment_model",
-        "script": "sentiment_model.py",
-        "output_prefix": "sentiment",
-        "ext": "json",
-        "needs_input": True,
-        "min_records": 1,
-        "build_args": lambda ctx, inp: ["--input", str(inp)],
-    },
-    {
-        "name": "topic_cluster",
-        "script": "topic_cluster.py",
-        "output_prefix": "topic",
-        "ext": "json",
-        "needs_input": True,
-        "min_records": 1,
-        "build_args": lambda ctx, inp: ["--input", str(inp)],
-    },
-    {
-        "name": "absa_extractor",
-        "script": "absa_extractor.py",
-        "output_prefix": "absa",
-        "ext": "json",
-        "needs_input": True,
-        "min_records": 1,
-        "build_args": lambda ctx, inp: ["--input", str(inp)],
-    },
-    {
-        "name": "risk_scanner",
-        "script": "risk_scanner.py",
-        "output_prefix": "risk",
-        "ext": "json",
-        "needs_input": True,
-        "min_records": 1,
-        "build_args": lambda ctx, inp: ["--input", str(inp)],
-    },
-    {
-        "name": "warner_score",
-        "script": "warner_score.py",
-        "output_prefix": "warning",
-        "ext": "json",
-        "needs_input": True,
-        "min_records": 1,
-        "build_args": lambda ctx, inp: ["--input", str(inp)],
     },
     {
         "name": "report_html",
@@ -123,10 +75,11 @@ STEPS = [
         "ext": "html",
         "needs_input": False,
         "min_records": 0,
-        "output_dir": REPORT_DIR,   # ← 关键修复：报告在 reports/ 目录
+        "output_dir": REPORT_DIR,
         "build_args": lambda ctx, _: [
             "--warning", str(find_latest_file(DATA_DIR, "warning", ctx.keyword)),
             "--risk", str(find_latest_file(DATA_DIR, "risk", ctx.keyword)),
+            *(["--rule-report-only"] if ctx.rule_report_only else []),
         ],
     },
 ]
@@ -247,15 +200,74 @@ def run_step(step: dict, ctx, last_output: Path = None) -> Path:
     return out_file
 
 
+async def save_weibo_login_state() -> None:
+    """保存微博登录态至 data/weibo_auth.json。"""
+    from playwright.async_api import async_playwright
+
+    state_file = DATA_DIR / "weibo_auth.json"
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+    print("=" * 50)
+    print("微博登录态保存工具（launcher login）")
+    print("=" * 50)
+
+    async with async_playwright() as p:
+        try:
+            browser = await p.chromium.launch(
+                headless=False,
+                channel="chrome",
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+            print("已启动系统 Chrome")
+        except Exception as e:
+            print(f"未检测到系统 Chrome，回退到 Chromium: {e}")
+            browser = await p.chromium.launch(
+                headless=False,
+                args=["--disable-blink-features=AutomationControlled"],
+            )
+
+        context = await browser.new_context(
+            viewport={"width": 1280, "height": 800},
+            locale="zh-CN",
+            timezone_id="Asia/Shanghai",
+        )
+        page = await context.new_page()
+
+        print("正在打开微博...")
+        await page.goto("https://weibo.com", wait_until="domcontentloaded")
+        await asyncio.sleep(5)
+
+        current_url = page.url
+        print(f"当前页面: {current_url}")
+
+        if "login" in current_url or "newlogin" in current_url:
+            print("请在新打开的浏览器窗口中扫码登录")
+        else:
+            print("如果未看到登录二维码，请手动刷新页面或访问 weibo.com/login")
+
+        input("\n完成扫码登录后，按回车键保存状态...")
+
+        await context.storage_state(path=str(state_file))
+        print(f"\n登录态已保存: {state_file}")
+
+        cookies = await context.cookies()
+        key_names = {"SUB", "SUBP", "SCF", "ALF"}
+        found = [c["name"] for c in cookies if c["name"] in key_names]
+        print(f"检测到关键 Cookie: {found}")
+
+        await browser.close()
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="足球舆情监测流水线启动器",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 示例:
+  python launcher.py login
   python launcher.py --keyword 中超 --start-date 2026-04-01 --end-date 2026-04-29
-  python launcher.py --keyword 中超 --start-from sentiment_model --start-date 2026-04-01 --end-date 2026-04-29
-  python launcher.py --keyword 中超 --start-date 2026-04-01 --end-date 2026-04-29 --no-headless --target-count 200
+  python launcher.py --keyword 中超 --start-from analysis_chain --start-date 2026-04-01 --end-date 2026-04-29
+  python launcher.py --keyword 中超 --start-date 2026-04-01 --end-date 2026-04-29 --efficient --fast-collect --turbo-collect
         """
     )
     parser.add_argument("--keyword", required=True, help="搜索关键词（如：中超、国足）")
@@ -268,10 +280,78 @@ def main():
     parser.add_argument("--start-from", default="collector",
                         choices=[s["name"] for s in STEPS],
                         help="从指定步骤开始运行，方便调试")
-    parser.add_argument("--no-llm", action="store_true",
-                        help="语义过滤步骤禁用 LLM 回退（节省 API 费用）")
+    parser.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="语义过滤步骤禁用 LLM 回退（与旧版一致；默认启用 LLM 灰区判定）",
+    )
+    parser.add_argument(
+        "--tfidf-topic-only",
+        action="store_true",
+        help="主题簇标签仅用 TF-IDF（默认与旧版一致：有 Key 则 LLM 命名）",
+    )
+    parser.add_argument(
+        "--rule-risk-only",
+        action="store_true",
+        help="风险扫描仅用规则（默认与旧版一致：有 Key 则 LLM 主路径）",
+    )
+    parser.add_argument(
+        "--rule-absa",
+        action="store_true",
+        help="ABSA 仅用规则/jieba（默认与旧版一致：LLM 主路径）",
+    )
+    parser.add_argument(
+        "--rule-report-only",
+        action="store_true",
+        help="报告研判摘要仅用规则模板（默认与旧版一致：有 Key 则先尝试 LLM）",
+    )
+    parser.add_argument(
+        "--efficient",
+        action="store_true",
+        help="一键高效：等价于同时开启 --no-llm --tfidf-topic-only --rule-absa --rule-risk-only --rule-report-only",
+    )
+    parser.add_argument(
+        "--semantic-gray-reject",
+        action="store_true",
+        help="语义相似度灰区一律丢弃（非足球），不调 LLM；可与 --no-llm 叠加",
+    )
+    parser.add_argument(
+        "--no-sentiment-llm-fallback",
+        action="store_true",
+        help="情感分析在模型失败或单条失败时不调用 LLM，使用默认中性兜底",
+    )
+    parser.add_argument(
+        "--llm-workers",
+        type=int,
+        default=6,
+        help="LLM HTTP 并发数（ABSA、风险、语义灰区等），默认 6；遇限流可改为 3",
+    )
+    parser.add_argument(
+        "--fast-collect",
+        action="store_true",
+        help="采集阶段缩短页面等待（略增被风控概率，可明显省时间）",
+    )
+    parser.add_argument(
+        "--turbo-collect",
+        action="store_true",
+        help="采集再加速：更短滚动/翻页等待 + 先拉满移动端分页；风控风险高于 --fast-collect，建议与 --fast-collect 同开",
+    )
 
     args = parser.parse_args()
+
+    if getattr(args, "efficient", False):
+        args.no_llm = True
+        args.tfidf_topic_only = True
+        args.rule_absa = True
+        args.rule_risk_only = True
+        args.rule_report_only = True
+
+    os.environ["LLM_MAX_WORKERS"] = str(max(1, min(32, args.llm_workers)))
+    if getattr(args, "fast_collect", False):
+        os.environ["WEIBO_FAST_COLLECT"] = "1"
+    if getattr(args, "turbo_collect", False):
+        os.environ["WEIBO_TURBO_COLLECT"] = "1"
+
     check_env()
 
     step_names = [s["name"] for s in STEPS]
@@ -282,6 +362,14 @@ def main():
     print(f"   日期   : {args.start_date} ~ {args.end_date}")
     print(f"   目标   : {args.target_count} 条")
     print(f"   起始   : {args.start_from}（第 {start_idx + 1}/{len(STEPS)} 步）")
+    if getattr(args, "efficient", False):
+        print("   模式   : 高效（--efficient：已启用 no-llm / tfidf-topic-only / rule-absa / rule-risk-only / rule-report-only）")
+    if getattr(args, "semantic_gray_reject", False):
+        print("   语义   : 灰区严弃（--semantic-gray-reject）")
+    if getattr(args, "no_sentiment_llm_fallback", False):
+        print("   情感   : 已禁用 LLM 回退（--no-sentiment-llm-fallback）")
+    if getattr(args, "turbo_collect", False):
+        print("   采集   : turbo（--turbo-collect，最短等待；建议已开 --fast-collect）")
     print("-" * 50)
 
     last_output = None
@@ -305,4 +393,7 @@ def main():
 
 
 if __name__ == "__main__":
+    if len(sys.argv) >= 2 and sys.argv[1] == "login":
+        asyncio.run(save_weibo_login_state())
+        sys.exit(0)
     main()

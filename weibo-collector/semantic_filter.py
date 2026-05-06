@@ -1,13 +1,16 @@
 import argparse
 import json
 import os
-import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-import requests
+import numpy as np
 from dotenv import load_dotenv
-from sklearn.metrics.pairwise import cosine_similarity
+
+from utils.llm_client import try_llm_client
+from utils.runtime import get_llm_max_workers, get_semantic_encode_batch
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DATA_DIR = SCRIPT_DIR / "data"
@@ -16,9 +19,6 @@ DATA_DIR.mkdir(exist_ok=True)
 ENV_PATH = SCRIPT_DIR / ".env"
 if ENV_PATH.exists():
     load_dotenv(dotenv_path=ENV_PATH)
-
-DS_KEY = os.getenv("DEEPSEEK_API_KEY")
-DS_URL = os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions")
 
 # ---------- 加载预训练语义模型 ----------
 try:
@@ -72,11 +72,9 @@ NEGATIVE_EXAMPLES = [
 ]
 
 # ---------- 阈值 ----------
-# 基于 sim_pos（与正例质心的相似度）直接判定。
-# 当前数据分布：足球 0.63~0.82，非足球 0.42~0.57，0.60 是安全分界线。
-POSITIVE_THRESHOLD = 0.60   # 直接保留
-NEGATIVE_THRESHOLD = 0.55   # 直接拒绝
-FALLBACK_THRESHOLD = 0.58   # LLM 不可用时保守线
+POSITIVE_THRESHOLD = 0.60
+NEGATIVE_THRESHOLD = 0.55
+FALLBACK_THRESHOLD = 0.58
 
 
 def load_model():
@@ -107,15 +105,7 @@ def compute_centroid(model, texts):
     return centroid.reshape(1, -1)
 
 
-def cosine_sim(a, b):
-    if a is None or b is None:
-        return 0.0
-    return float(cosine_similarity(a, b)[0, 0])
-
-
-def prompt_llm(text: str):
-    if not DS_KEY:
-        return None
+def prompt_llm_football(text: str, client) -> Optional[Dict[str, Any]]:
     system_prompt = (
         "你是一个足球舆情内容审核助手。请判断给定文本是否属于中国足球、中超、国足、"
         "足协杯、亚冠、青训、球员转会、裁判争议等足球相关舆情。"
@@ -123,52 +113,22 @@ def prompt_llm(text: str):
         "confidence（0.0-1.0 浮点数，表示确信度）、"
         "reason（不超过20字的判定理由）。"
     )
-    try:
-        resp = requests.post(
-            DS_URL,
-            headers={"Authorization": f"Bearer {DS_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": "deepseek-chat",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"待审核文本：\n{text}\n"},
-                ],
-                "temperature": 0.0,
-                "max_tokens": 200,
-                "response_format": {"type": "json_object"},
-            },
-            timeout=25,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        if not content:
-            return None
-        result = json.loads(content)
-        if "football_related" not in result or "confidence" not in result:
-            return None
-        result["confidence"] = max(0.0, min(1.0, float(result["confidence"])))
-        return result
-    except Exception:
+    parsed = client.chat_json(
+        system_prompt,
+        f"待审核文本：\n{text}\n",
+        temperature=0.0,
+        max_tokens=200,
+        response_format={"type": "json_object"},
+    )
+    if not isinstance(parsed, dict):
         return None
-
-
-def score_text(text: str, model, pos_centroid, neg_centroid):
-    if not text or not text.strip():
-        return 0.0, 0.0, "空文本"
-    emb = model.encode(
-        text,
-        normalize_embeddings=True,
-        convert_to_numpy=True,
-        show_progress_bar=False,
-    ).reshape(1, -1)
-    sim_pos = cosine_sim(emb, pos_centroid)
-    sim_neg = cosine_sim(emb, neg_centroid)
-    # 核心修复：用 sim_pos 作为决策分数，而非 sim_pos - sim_neg
-    score = float(sim_pos)
-    confidence = float(sim_pos)
-    detail = f"pos={sim_pos:.3f}, neg={sim_neg:.3f}, score={score:.3f}"
-    return score, confidence, detail
+    if "football_related" not in parsed or "confidence" not in parsed:
+        return None
+    try:
+        parsed["confidence"] = max(0.0, min(1.0, float(parsed["confidence"])))
+    except (TypeError, ValueError):
+        parsed["confidence"] = 0.5
+    return parsed
 
 
 def build_output_path(keyword: str, prefix: str):
@@ -176,58 +136,118 @@ def build_output_path(keyword: str, prefix: str):
     return DATA_DIR / f"{prefix}_{keyword}_{stamp}.json"
 
 
-def main():
-    parser = argparse.ArgumentParser(description="足球相关性语义过滤脚本（预训练语义模型 + LLM 回退）")
-    parser.add_argument("--input", required=True, help="上游 deduped JSON 文件路径")
-    parser.add_argument("--no-llm", action="store_true", help="禁用 LLM 回退，仅使用语义模型")
-    args = parser.parse_args()
-
-    input_path = Path(args.input)
-    if not input_path.exists():
-        raise SystemExit(f"未找到输入文件: {input_path}")
-
+def run_semantic_filter(
+    input_path: Path,
+    no_semantic_llm: bool = False,
+    semantic_gray_reject: bool = False,
+) -> Tuple[Path, Path]:
     with open(input_path, "r", encoding="utf-8") as f:
         payload = json.load(f)
 
     keyword = payload.get("meta", {}).get("keyword") or input_path.stem
-    posts = payload.get("data", [])
+    posts: List[Dict] = payload.get("data", [])
 
     print(f"加载 {len(posts)} 条帖子，初始化语义模型...")
+    if semantic_gray_reject:
+        print("已启用语义灰区严弃：相似度在正负阈值之间的帖子一律判为非足球并丢弃（不调 LLM）。")
     model = load_model()
     print("构建正负例语义质心...")
     pos_centroid = compute_centroid(model, POSITIVE_EXAMPLES)
     neg_centroid = compute_centroid(model, NEGATIVE_EXAMPLES)
 
-    filtered = []
-    rejected = []
+    texts = [(post.get("clean_text") or post.get("raw_text") or "").strip() for post in posts]
+    n = len(posts)
+    sim_pos_arr = np.zeros(n, dtype=np.float64)
+    sim_neg_arr = np.zeros(n, dtype=np.float64)
+    nonempty_idx = [i for i, t in enumerate(texts) if t]
+    enc_batch = get_semantic_encode_batch()
+    if nonempty_idx:
+        to_encode = [texts[i] for i in nonempty_idx]
+        emb = model.encode(
+            to_encode,
+            batch_size=enc_batch,
+            normalize_embeddings=True,
+            convert_to_numpy=True,
+            show_progress_bar=False,
+        )
+        # 质心是「已归一化向量」的均值，本身一般不是单位向量；必须与原版 sklearn.cosine_similarity 一致：
+        # cos(u, c) = (u·c) / ||c||（u 已为 sentence-transformers 行归一化，||u||=1）
+        pc = pos_centroid.reshape(-1)
+        nc = neg_centroid.reshape(-1)
+        pc_norm = float(np.linalg.norm(pc)) + 1e-12
+        nc_norm = float(np.linalg.norm(nc)) + 1e-12
+        sp = (emb @ pc) / pc_norm
+        sn = (emb @ nc) / nc_norm
+        for row, global_i in enumerate(nonempty_idx):
+            sim_pos_arr[global_i] = float(sp[row])
+            sim_neg_arr[global_i] = float(sn[row])
+
+    llm_client = None if no_semantic_llm else try_llm_client()
+
+    pending_gray: List[Tuple[int, str, float, str]] = []
+    for i in range(n):
+        t = texts[i]
+        score = float(sim_pos_arr[i])
+        snv = float(sim_neg_arr[i])
+        detail = f"pos={score:.3f}, neg={snv:.3f}, score={score:.3f}"
+        if not t:
+            continue
+        if NEGATIVE_THRESHOLD < score < POSITIVE_THRESHOLD and not semantic_gray_reject:
+            pending_gray.append((i, t, score, detail))
+
+    gray_llm: Dict[int, Optional[Dict[str, Any]]] = {}
     llm_called = 0
     llm_failed = 0
+    if pending_gray and llm_client is not None and not no_semantic_llm:
+        llm_called = len(pending_gray)
+        workers = min(get_llm_max_workers(), len(pending_gray))
+
+        def _gray_llm(item: Tuple[int, str, float, str]) -> Tuple[int, Optional[Dict[str, Any]]]:
+            gi, gtext, _, _ = item
+            return gi, prompt_llm_football(gtext, llm_client)
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for gi, llm_result in pool.map(_gray_llm, pending_gray):
+                gray_llm[gi] = llm_result
+                if llm_result is None:
+                    llm_failed += 1
+    elif pending_gray:
+        for gi, _, _, _ in pending_gray:
+            gray_llm[gi] = None
+
+    filtered: List[Dict] = []
+    rejected: List[Dict] = []
 
     for idx, post in enumerate(posts, 1):
-        text = (post.get("clean_text") or post.get("raw_text") or "").strip()
-        score, confidence, detail = score_text(text, model, pos_centroid, neg_centroid)
+        text = texts[idx - 1]
+        score = float(sim_pos_arr[idx - 1])
+        snv = float(sim_neg_arr[idx - 1])
+        detail = f"pos={score:.3f}, neg={snv:.3f}, score={score:.3f}"
 
-        post["relevance_confidence"] = round(confidence, 4)
+        post["relevance_confidence"] = round(score, 4)
         post["football_related"] = False
         reason = ""
 
-        if score >= POSITIVE_THRESHOLD:
+        if not text:
+            post["football_related"] = False
+            reason = f"空文本 ({detail})"
+        elif score >= POSITIVE_THRESHOLD:
             post["football_related"] = True
             reason = f"语义模型正相似度高于阈值 {POSITIVE_THRESHOLD} ({detail})"
         elif score <= NEGATIVE_THRESHOLD:
             post["football_related"] = False
             reason = f"语义模型相似度低于阈值 {NEGATIVE_THRESHOLD}，判定为非足球 ({detail})"
+        elif semantic_gray_reject:
+            post["football_related"] = False
+            reason = f"语义模型灰区，严弃模式一律判定为非足球 ({detail})"
         else:
-            # 中间地带：0.55 ~ 0.60，理论上当前数据不会落入，留给未来数据或 LLM
-            if not args.no_llm and DS_KEY:
-                llm_called += 1
-                llm_result = prompt_llm(text)
+            if not no_semantic_llm and llm_client is not None:
+                llm_result = gray_llm.get(idx - 1)
                 if llm_result:
                     post["football_related"] = bool(llm_result["football_related"])
-                    post["relevance_confidence"] = round(llm_result["confidence"], 4)
+                    post["relevance_confidence"] = round(float(llm_result["confidence"]), 4)
                     reason = f"LLM 判定: {llm_result.get('reason', '无理由')} ({detail})"
                 else:
-                    llm_failed += 1
                     post["football_related"] = score >= FALLBACK_THRESHOLD
                     reason = f"LLM 调用失败，保守启发式回退 (score={score:.3f})"
             else:
@@ -244,7 +264,11 @@ def main():
         if idx % 500 == 0:
             print(f"  已处理 {idx}/{len(posts)} 条...")
 
-    # ---------- 输出 ----------
+    if semantic_gray_reject:
+        method = "pretrained_embedding+gray_reject_strict"
+    else:
+        method = "pretrained_embedding+llm_fallback"
+
     filtered_path = build_output_path(keyword, "filtered")
     rejected_path = build_output_path(keyword, "rejected")
 
@@ -255,7 +279,7 @@ def main():
                     "keyword": keyword,
                     "date_range": payload.get("meta", {}).get("date_range", ""),
                     "actual": len(filtered),
-                    "method": "pretrained_embedding+llm_fallback",
+                    "method": method,
                 },
                 "data": filtered,
             },
@@ -286,6 +310,34 @@ def main():
         print(f"LLM 回退调用: {llm_called} 次，失败: {llm_failed} 次")
     print(f"filtered  -> {filtered_path}")
     print(f"rejected  -> {rejected_path}")
+
+    return filtered_path, rejected_path
+
+
+def main():
+    parser = argparse.ArgumentParser(description="足球相关性语义过滤脚本（预训练语义模型 + LLM 回退，与旧版一致）")
+    parser.add_argument("--input", required=True, help="上游 deduped JSON 文件路径")
+    parser.add_argument(
+        "--no-llm",
+        action="store_true",
+        help="禁用 LLM 回退，模糊区域仅用启发式阈值（省 API，与旧版 --no-llm 一致）",
+    )
+    parser.add_argument(
+        "--semantic-gray-reject",
+        action="store_true",
+        help="灰区（正负阈值之间）一律判为非足球并丢弃，不调 LLM、不用启发式捞回",
+    )
+    args = parser.parse_args()
+
+    input_path = Path(args.input)
+    if not input_path.exists():
+        raise SystemExit(f"未找到输入文件: {input_path}")
+
+    run_semantic_filter(
+        input_path,
+        no_semantic_llm=args.no_llm,
+        semantic_gray_reject=args.semantic_gray_reject,
+    )
 
 
 if __name__ == "__main__":

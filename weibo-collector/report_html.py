@@ -1,24 +1,15 @@
 import argparse
 import json
-import os
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
-import requests
-from dotenv import load_dotenv
+from utils.llm_client import try_llm_client
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DATA_DIR = SCRIPT_DIR / "data"
 REPORT_DIR = SCRIPT_DIR / "reports"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
-
-ENV_PATH = SCRIPT_DIR / ".env"
-if ENV_PATH.exists():
-    load_dotenv(dotenv_path=ENV_PATH)
-
-DS_KEY = os.getenv("DEEPSEEK_API_KEY")
-DS_URL = os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions")
 
 
 # ==================== 辅助函数（全部前置，避免 NameError） ====================
@@ -242,9 +233,7 @@ def svg_absa_matrix(posts):
 
 
 # ==================== LLM 智能分析 ====================
-def generate_insight_llm(warning_data, risk_data):
-    if not DS_KEY:
-        return None
+def generate_insight_llm(warning_data, risk_data, client):
     score = warning_data.get("total_score", 0)
     level = warning_data.get("risk_level", "low")
     dominant = warning_data.get("dominant_risk", "暂无")
@@ -275,48 +264,34 @@ def generate_insight_llm(warning_data, risk_data):
         "suggestions（对象，键为 emergency/short/medium/long，值为字符串数组）。"
     )
 
+    nr = negative_rate if isinstance(negative_rate, (int, float)) else 0.0
     user_content = (
         f"监测周期：{warning_data.get('meta', {}).get('date_range', '未知')} | 样本量：{actual} 条\n"
         f"总评分：{score}，风险等级：{level}\n"
         f"主导风险：{dominant}\n"
-        f"负面率：{negative_rate:.1%} | 高风险：{high_count} 条 | 中风险：{medium_count} 条\n"
+        f"负面率：{nr:.1%} | 高风险：{high_count} 条 | 中风险：{medium_count} 条\n"
         f"风险类别分布：{cat_str}\n"
         f"高频风险实体：{entity_str}\n"
         f"趋势判断：{trend}"
     )
 
-    try:
-        resp = requests.post(
-            DS_URL,
-            headers={"Authorization": f"Bearer {DS_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": "deepseek-chat",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content},
-                ],
-                "temperature": 0.2,
-                "max_tokens": 800,
-                "response_format": {"type": "json_object"},
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        if not content:
-            return None
-        result = json.loads(content)
-        return {
-            "summary": result.get("summary", ""),
-            "theme_analysis": result.get("theme_analysis", {}),
-            "suggestions": {
-                k: [str(s) for s in v] if isinstance(v, list) else [str(v)]
-                for k, v in result.get("suggestions", {}).items()
-            },
-        }
-    except Exception:
+    result = client.chat_json(
+        system_prompt,
+        user_content,
+        temperature=0.2,
+        max_tokens=800,
+        response_format={"type": "json_object"},
+    )
+    if not isinstance(result, dict):
         return None
+    return {
+        "summary": result.get("summary", ""),
+        "theme_analysis": result.get("theme_analysis", {}),
+        "suggestions": {
+            k: [str(s) for s in v] if isinstance(v, list) else [str(v)]
+            for k, v in result.get("suggestions", {}).items()
+        },
+    }
 
 
 def generate_insight_rule(warning_data, risk_data):
@@ -402,24 +377,23 @@ def generate_insight_rule(warning_data, risk_data):
 
 
 # ==================== 主逻辑 ====================
-def main():
-    parser = argparse.ArgumentParser(description="足协舆情监测 HTML 报告生成（专业研判版）")
-    parser.add_argument("--warning", help="warning JSON 文件路径")
-    parser.add_argument("--risk", help="risk JSON 文件路径")
-    args = parser.parse_args()
-
-    warning_data = safe_load(args.warning) if args.warning else None
-    risk_data = safe_load(args.risk) if args.risk else None
+def run_report_html(
+    warning_arg: str | None,
+    risk_arg: str | None,
+    use_llm_insight: bool = True,
+) -> Path:
+    warning_data = safe_load(warning_arg) if warning_arg else None
+    risk_data = safe_load(risk_arg) if risk_arg else None
 
     if not warning_data or not risk_data:
         print("报告生成：未提供完整 warning/risk 数据，尝试自动从 data 目录读取...")
         warnings = sorted(DATA_DIR.glob("warning_*.json"), key=lambda x: x.stat().st_mtime, reverse=True)
         risks = sorted(DATA_DIR.glob("risk_*.json"), key=lambda x: x.stat().st_mtime, reverse=True)
         if not warning_data and warnings:
-            warning_data = safe_load(warnings[0])
+            warning_data = safe_load(str(warnings[0]))
             print(f"  自动读取 warning: {warnings[0].name}")
         if not risk_data and risks:
-            risk_data = safe_load(risks[0])
+            risk_data = safe_load(str(risks[0]))
             print(f"  自动读取 risk: {risks[0].name}")
 
     keyword = "未知"
@@ -459,9 +433,14 @@ def main():
     trend_chart = svg_time_trend(posts)
     absa_chart = svg_absa_matrix(posts)
 
+    insight_from_llm = False
     insight = None
-    if warning_data and risk_data:
-        insight = generate_insight_llm(warning_data, risk_data)
+    if warning_data and risk_data and use_llm_insight:
+        client = try_llm_client()
+        if client is not None:
+            insight = generate_insight_llm(warning_data, risk_data, client)
+            if insight:
+                insight_from_llm = True
     if not insight:
         insight = generate_insight_rule(warning_data, risk_data)
 
@@ -470,10 +449,11 @@ def main():
     theme_blocks = []
     if insight and insight.get("theme_analysis"):
         for cat, analysis in insight["theme_analysis"].items():
+            analysis_text = analysis if isinstance(analysis, str) else str(analysis)
             theme_blocks.append(f"""
             <div style="margin-bottom:10px;padding:10px 14px;background:#f9fafb;border-radius:8px;border-left:3px solid #2e4668;">
                 <div style="font-weight:600;color:#1f2937;font-size:14px;margin-bottom:4px;">{cat}</div>
-                <div style="color:#4b5563;font-size:13px;line-height:1.6;">{analysis}</div>
+                <div style="color:#4b5563;font-size:13px;line-height:1.6;">{analysis_text}</div>
             </div>""")
     theme_section = "".join(theme_blocks) if theme_blocks else "<div class='no-data'>暂无分主题数据</div>"
 
@@ -631,7 +611,7 @@ def main():
 <div class="card">
   <h2>舆情研判摘要
     <span style="font-size:12px;font-weight:400;color:#6b7280;margin-left:8px;">
-      {'（LLM 生成）' if insight and DS_KEY else '（规则模板）'}
+      {'（LLM 生成）' if insight_from_llm else '（规则模板）'}
     </span>
   </h2>
   <div class="insight-box">
@@ -676,8 +656,22 @@ def main():
         f.write(html)
 
     print(f"HTML 报告已生成: {output_path}")
-    print(f"智能分析来源: {'LLM 生成' if insight and DS_KEY else '规则模板回退'}")
+    print(f"智能分析来源: {'LLM 生成' if insight_from_llm else '规则模板'}")
     print(f"请用浏览器直接打开查看；支持打印（Ctrl+P）导出 PDF。")
+    return output_path
+
+
+def main():
+    parser = argparse.ArgumentParser(description="足协舆情监测 HTML 报告生成（专业研判版）")
+    parser.add_argument("--warning", help="warning JSON 文件路径")
+    parser.add_argument("--risk", help="risk JSON 文件路径")
+    parser.add_argument(
+        "--rule-report-only",
+        action="store_true",
+        help="研判摘要仅用规则模板，不调用 LLM（加速；默认与旧版一致：有 Key 则先尝试 LLM）",
+    )
+    args = parser.parse_args()
+    run_report_html(args.warning, args.risk, use_llm_insight=not args.rule_report_only)
 
 
 if __name__ == "__main__":

@@ -1,24 +1,17 @@
 import argparse
 import json
-import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
-import requests
-from dotenv import load_dotenv
+from utils.llm_client import try_llm_client
+from utils.runtime import get_llm_batch_size, get_llm_max_workers
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DATA_DIR = SCRIPT_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 
-ENV_PATH = SCRIPT_DIR / ".env"
-if ENV_PATH.exists():
-    load_dotenv(dotenv_path=ENV_PATH)
-
-DS_KEY = os.getenv("DEEPSEEK_API_KEY")
-DS_URL = os.getenv("DEEPSEEK_API_URL", "https://api.deepseek.com/chat/completions")
-
-# 仅保留绝对红线：文本出现这些词，强制 high，覆盖 LLM 任何结果
 FORCE_HIGH_WORDS = ["假球", "黑哨", "赌球", "操纵比赛", "默契球", "协议球"]
 
 
@@ -27,14 +20,7 @@ def build_output_path(keyword: str):
     return DATA_DIR / f"risk_{keyword}_{stamp}.json"
 
 
-def determine_risk_llm(post: dict):
-    """
-    LLM 主路径：零字典，完全基于语义动态输出 risk_category。
-    可输出任意中文类别，如"裁判争议风险""德比冲突风险""草皮舆论""青训正面反馈"等。
-    """
-    if not DS_KEY:
-        return None
-
+def determine_risk_llm(post: dict, client) -> Optional[Dict[str, Any]]:
     text = (post.get("clean_text") or post.get("raw_text") or "").strip()
     sentiment = post.get("sentiment", "中性")
     topic_label = post.get("topic_label", "")
@@ -65,55 +51,114 @@ def determine_risk_llm(post: dict):
         f"方面级情感：{json.dumps(aspects, ensure_ascii=False)}"
     )
 
-    try:
-        resp = requests.post(
-            DS_URL,
-            headers={"Authorization": f"Bearer {DS_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": "deepseek-chat",
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_content},
-                ],
-                "temperature": 0.1,
-                "max_tokens": 120,
-                "response_format": {"type": "json_object"},
-            },
-            timeout=20,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        if not content:
-            return None
+    result = client.chat_json(
+        system_prompt,
+        user_content,
+        temperature=0.1,
+        max_tokens=120,
+        response_format={"type": "json_object"},
+    )
+    return _normalize_risk_dict(result)
 
-        result = json.loads(content)
-        if not all(k in result for k in ("risk_level", "risk_category", "risk_entities")):
-            return None
-        if result["risk_level"] not in ("high", "medium", "low"):
-            return None
-        if not isinstance(result["risk_entities"], list):
-            result["risk_entities"] = []
 
-        # 清洗：确保 category 不是空泛词
-        cat = str(result["risk_category"]).strip()
-        if cat in ("负面舆情", "一般舆情", "无", ""):
-            return None  # 让 fallback 重新生成带 topic 的类别
-
-        return {
-            "risk_level": result["risk_level"],
-            "risk_category": cat,
-            "risk_entities": [str(e) for e in result["risk_entities"]],
-        }
-    except Exception:
+def _normalize_risk_dict(result: Any) -> Optional[Dict[str, Any]]:
+    if not isinstance(result, dict):
         return None
+    if not all(k in result for k in ("risk_level", "risk_category", "risk_entities")):
+        return None
+    if result["risk_level"] not in ("high", "medium", "low"):
+        return None
+    if not isinstance(result["risk_entities"], list):
+        result["risk_entities"] = []
+
+    cat = str(result["risk_category"]).strip()
+    if cat in ("负面舆情", "一般舆情", "无", ""):
+        return None
+
+    return {
+        "risk_level": result["risk_level"],
+        "risk_category": cat,
+        "risk_entities": [str(e) for e in result["risk_entities"]],
+    }
+
+
+def _risk_compact_block(idx: int, post: dict, max_text: int = 360) -> str:
+    text = (post.get("clean_text") or post.get("raw_text") or "").strip()[:max_text].replace("\n", " ")
+    sentiment = post.get("sentiment", "中性")
+    topic_label = post.get("topic_label", "")
+    aspects = post.get("aspect_sentiments") or []
+    asp_s = json.dumps(aspects, ensure_ascii=False)[:500]
+    return f"[{idx}] 正文:{text}\n情感:{sentiment}\n主题:{topic_label}\n方面:{asp_s}"
+
+
+def determine_risk_llm_batch(batch: List[Tuple[int, dict]], client) -> Optional[Dict[int, Dict[str, Any]]]:
+    """一批多条共一次 LLM；batch 为 (下标, post)。"""
+    if not batch:
+        return {}
+    lines = [_risk_compact_block(i, p) for i, p in batch]
+    block = "\n---\n".join(lines)
+    system_prompt = (
+        "你是足球舆情风险判定专家。输入多段，每段以「[整数id]」开头，含正文/情感/主题/方面级情感。"
+        "请为每个 id 输出一条风险判定。输出 JSON 对象，仅含 results 数组；"
+        "每项含 id（整数）与 risk_level（high/medium/low）、risk_category（具体方向+风险/舆论后缀，"
+        "禁止泛泛的负面舆情/一般舆情）、risk_entities（字符串数组）。"
+        "必须覆盖每一个输入 id，不要遗漏。"
+    )
+    max_tokens = min(4096, 100 + 110 * len(batch))
+    parsed = client.chat_json(
+        system_prompt,
+        f"待判定：\n{block}\n",
+        temperature=0.1,
+        max_tokens=max_tokens,
+        response_format={"type": "json_object"},
+    )
+    if not isinstance(parsed, dict):
+        return None
+    arr = parsed.get("results")
+    if not isinstance(arr, list):
+        return None
+    out: Dict[int, Dict[str, Any]] = {}
+    for item in arr:
+        if not isinstance(item, dict):
+            continue
+        try:
+            idx = int(item.get("id"))
+        except (TypeError, ValueError):
+            continue
+        one = _normalize_risk_dict(item)
+        if one is None:
+            return None
+        out[idx] = one
+    expected = {i for i, _ in batch}
+    if expected != set(out.keys()):
+        return None
+    return out
+
+
+def _risk_batch_recursive(batch: List[Tuple[int, dict]], client, depth: int) -> Dict[int, Dict[str, Any]]:
+    if not batch:
+        return {}
+    if len(batch) == 1:
+        idx, post = batch[0]
+        llm = determine_risk_llm(post, client)
+        if llm is not None:
+            return {idx: llm}
+        return {idx: determine_risk_rule(post)}
+
+    parsed = determine_risk_llm_batch(batch, client)
+    if parsed is not None:
+        return parsed
+
+    if depth >= 7:
+        return {i: determine_risk_rule(p) for i, p in batch}
+
+    mid = max(1, len(batch) // 2)
+    a = _risk_batch_recursive(batch[:mid], client, depth + 1)
+    b = _risk_batch_recursive(batch[mid:], client, depth + 1)
+    return {**a, **b}
 
 
 def determine_risk_rule(post: dict):
-    """
-    规则回退：LLM 失败时使用。基于 topic_label + sentiment + aspect 动态生成类别，
-    不查任何字典。
-    """
     text = (post.get("clean_text") or post.get("raw_text") or "").lower()
     sentiment = post.get("sentiment", "中性")
     topic_label = post.get("topic_label", "")
@@ -132,7 +177,6 @@ def determine_risk_rule(post: dict):
             if "裁判" in target or "var" in target.lower():
                 has_referee = True
 
-    # 强制红线
     for w in FORCE_HIGH_WORDS:
         if w in text:
             return {
@@ -141,13 +185,11 @@ def determine_risk_rule(post: dict):
                 "risk_entities": sorted(set(risk_entities) | {w}),
             }
 
-    # 动态生成类别：用 topic_label 直接拼接
     if not topic_label:
         base = "未分类"
     else:
         base = topic_label
 
-    # 判定等级
     if has_referee and has_negative_aspect:
         level = "medium"
         category = f"{base}风险" if "风险" not in base else base
@@ -169,18 +211,15 @@ def determine_risk_rule(post: dict):
 
 
 def enforce_hard_rules(post: dict, risk: dict):
-    """强制校验：假球/黑哨/裁判负面 绝不漏网"""
     text = (post.get("clean_text") or post.get("raw_text") or "").lower()
     entities = set(risk["risk_entities"])
 
-    # 假球/黑哨 → 强制 high
     for w in FORCE_HIGH_WORDS:
         if w in text:
             risk["risk_level"] = "high"
             risk["risk_category"] = "敏感事件"
             entities.add(w)
 
-    # 裁判 + 负面 aspect → 至少 medium
     aspects = post.get("aspect_sentiments") or []
     has_referee_negative = any(
         ("裁判" in a.get("target", "") or "var" in a.get("target", "").lower())
@@ -189,7 +228,6 @@ def enforce_hard_rules(post: dict, risk: dict):
     )
     if has_referee_negative and risk["risk_level"] not in ("high",):
         risk["risk_level"] = "medium"
-        # 如果当前类别不是风险类，升级之
         if "风险" not in risk["risk_category"]:
             risk["risk_category"] = "裁判争议风险"
         entities.add("裁判争议")
@@ -198,38 +236,70 @@ def enforce_hard_rules(post: dict, risk: dict):
     return risk
 
 
-def main():
-    parser = argparse.ArgumentParser(
-        description="风险扫描脚本（LLM 零字典动态语义 + 规则回退）"
-    )
-    parser.add_argument("--input", required=True, help="上游 absa JSON 文件")
-    args = parser.parse_args()
+def needs_risk_llm_after_rule(post: dict, risk: dict) -> bool:
+    """规则分层：已 high 或整体中性无负面方面则不再调 LLM。"""
+    if risk.get("risk_level") == "high":
+        return False
+    sentiment = post.get("sentiment", "中性")
+    if sentiment in ("强烈负面", "轻微负面"):
+        return True
+    aspects = post.get("aspect_sentiments") or []
+    if any(a.get("sentiment") == "negative" for a in aspects):
+        return True
+    return False
 
-    input_path = Path(args.input)
-    if not input_path.exists():
-        raise SystemExit(f"未找到输入文件: {input_path}")
 
+def run_risk_scan(input_path: Path, use_llm: bool = True) -> Path:
     with open(input_path, "r", encoding="utf-8") as f:
         payload = json.load(f)
 
     keyword = payload.get("meta", {}).get("keyword") or input_path.stem
-    posts = payload.get("data", [])
+    posts: List[Dict] = payload.get("data", [])
 
-    llm_count = 0
-    rule_count = 0
+    llm_client = try_llm_client() if use_llm else None
+
+    llm_used_posts = 0
+    rule_only_posts = 0
     high_count = 0
     medium_count = 0
     low_count = 0
 
+    rule_base: List[Dict[str, Any]] = []
     for post in posts:
-        risk = determine_risk_llm(post)
-        if risk:
-            llm_count += 1
-        else:
-            risk = determine_risk_rule(post)
-            rule_count += 1
+        r = enforce_hard_rules(post, determine_risk_rule(post))
+        rule_base.append(r)
 
-        risk = enforce_hard_rules(post, risk)
+    need_idx: List[int] = []
+    if llm_client is not None:
+        for i, post in enumerate(posts):
+            if needs_risk_llm_after_rule(post, rule_base[i]):
+                need_idx.append(i)
+
+    llm_batch_requests = 0
+    llm_map: Dict[int, Dict[str, Any]] = {}
+    if llm_client is not None and need_idx:
+        bs = get_llm_batch_size()
+        chunks: List[List[Tuple[int, dict]]] = []
+        for s in range(0, len(need_idx), bs):
+            chunk_idx = need_idx[s : s + bs]
+            chunks.append([(i, posts[i]) for i in chunk_idx])
+        llm_batch_requests = len(chunks)
+
+        def _process_risk_chunk(ch: List[Tuple[int, dict]]) -> Dict[int, Dict[str, Any]]:
+            return _risk_batch_recursive(ch, llm_client, 0)
+
+        workers = min(get_llm_max_workers(), max(1, len(chunks)))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            for part in ex.map(_process_risk_chunk, chunks):
+                llm_map.update(part)
+
+    for idx, post in enumerate(posts):
+        if idx in llm_map and llm_map[idx]:
+            risk = enforce_hard_rules(post, llm_map[idx])
+            llm_used_posts += 1
+        else:
+            risk = rule_base[idx]
+            rule_only_posts += 1
 
         post.update(risk)
 
@@ -251,8 +321,14 @@ def main():
                     "high_risk_count": high_count,
                     "medium_risk_count": medium_count,
                     "low_risk_count": low_count,
-                    "llm_used": llm_count,
-                    "rule_fallback": rule_count,
+                    "llm_used_posts": llm_used_posts,
+                    "rule_only_posts": rule_only_posts,
+                    "llm_used": llm_used_posts,
+                    "rule_fallback": rule_only_posts,
+                    "llm_batch_requests": llm_batch_requests if llm_client and need_idx else 0,
+                    "llm_batch_size": get_llm_batch_size() if llm_client and need_idx else None,
+                    "llm_max_workers": get_llm_max_workers() if llm_client and need_idx else None,
+                    "llm_risk": bool(use_llm and llm_client is not None),
                 },
                 "data": posts,
             },
@@ -262,8 +338,34 @@ def main():
         )
 
     print(f"风险扫描完成：high {high_count} 条，medium {medium_count} 条，low {low_count} 条。")
-    print(f"LLM 主路径: {llm_count} 条，规则回退: {rule_count} 条。")
+    rw = min(get_llm_max_workers(), max(1, llm_batch_requests)) if need_idx else 0
+    print(
+        f"规则先行：{rule_only_posts} 条未再调 LLM；"
+        f"LLM 细化 {llm_used_posts} 条（顶层批 {llm_batch_requests} 次，"
+        f"批大小≤{get_llm_batch_size()}，顶层并发 {rw}，可调 LLM_MAX_WORKERS）。"
+    )
     print(f"结果已写入: {output_path}")
+
+    return output_path
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="风险扫描（规则先行 + 批量 LLM 细化；--rule-only 则全规则）"
+    )
+    parser.add_argument("--input", required=True, help="上游 absa JSON 文件")
+    parser.add_argument(
+        "--rule-only",
+        action="store_true",
+        help="仅用规则 + 硬规则校正，不调用 LLM（加速）",
+    )
+    args = parser.parse_args()
+
+    input_path = Path(args.input)
+    if not input_path.exists():
+        raise SystemExit(f"未找到输入文件: {input_path}")
+
+    run_risk_scan(input_path, use_llm=not args.rule_only)
 
 
 if __name__ == "__main__":

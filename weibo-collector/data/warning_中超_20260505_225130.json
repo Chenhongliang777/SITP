@@ -1,0 +1,35 @@
+{
+  "meta": {
+    "keyword": "中超",
+    "date_range": "2026-04-28 to 2026-04-29",
+    "actual": 1,
+    "high_risk_count": 0,
+    "medium_risk_count": 0,
+    "low_risk_count": 1,
+    "extreme_negative_count": 1,
+    "negative_count": 1,
+    "negative_rate": 1.0
+  },
+  "total_score": 60.0,
+  "risk_level": "high",
+  "dominant_risk": "比赛节奏舆论",
+  "dominant_contribution": {
+    "count": 1,
+    "ratio": 1.0,
+    "description": "1 条微博涉及 比赛节奏舆论，占总样本 100.0%"
+  },
+  "category_breakdown": [
+    {
+      "category": "比赛节奏舆论",
+      "count": 1,
+      "ratio": 1.0,
+      "risk_level": "low",
+      "score_contribution": 60.0
+    }
+  ],
+  "entity_counts": {
+    "中超": 1
+  },
+  "trend_description": "负面舆情强烈，比赛节奏舆论为主要矛盾点，建议立即介入并密切跟进传播态势。",
+  "generated_at": "2026-05-05T22:51:30.538006"
+}

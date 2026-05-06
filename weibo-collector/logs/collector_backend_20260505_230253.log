@@ -1,0 +1,17 @@
+[23:02:54] 已加载登录态: E:\大三下\sitp\SITP-main-1\SITP-main\weibo-collector\data\weibo_auth.json
+[23:03:01] DOM主链路第1页，当前 0/50
+[23:03:22] 本页 DOM 提取 10 条
+[23:03:28] DOM主链路第2页，当前 10/50
+[23:03:47] 本页 DOM 提取 10 条
+[23:03:52] DOM主链路第3页，当前 20/50
+[23:04:17] 本页 DOM 提取 9 条
+[23:04:24] DOM主链路第4页，当前 29/50
+[23:04:50] 本页 DOM 提取 9 条
+[23:04:54] DOM主链路第5页，当前 38/50
+[23:05:22] 本页 DOM 提取 10 条
+[23:05:28] DOM主链路第6页，当前 48/50
+[23:05:56] 本页 DOM 提取 2 条
+[23:06:01] DOM主链路累计 50 条
+[23:06:01] 已输出: E:\大三下\sitp\SITP-main-1\SITP-main\weibo-collector\data\raw_中超_20260505_230601.json
+[23:06:01] 已输出样例: E:\大三下\sitp\SITP-main-1\SITP-main\weibo-collector\data\raw_sample.json
+[23:06:01] clean_text 平均长度: 338.40

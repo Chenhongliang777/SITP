@@ -1,0 +1,203 @@
+{
+  "meta": {
+    "keyword": "中超",
+    "date_range": "2026-04-28 to 2026-04-29",
+    "actual": 34,
+    "high_risk_count": 0,
+    "medium_risk_count": 11,
+    "low_risk_count": 23,
+    "extreme_negative_count": 6,
+    "negative_count": 13,
+    "negative_rate": 0.3824
+  },
+  "total_score": 49.56,
+  "risk_level": "medium",
+  "dominant_risk": "裁判争议风险",
+  "dominant_contribution": {
+    "count": 7,
+    "ratio": 0.2059,
+    "description": "7 条微博涉及 裁判争议风险，占总样本 20.6%"
+  },
+  "category_breakdown": [
+    {
+      "category": "裁判争议风险",
+      "count": 7,
+      "ratio": 0.2059,
+      "risk_level": "medium",
+      "score_contribution": 19.56
+    },
+    {
+      "category": "青训舆论",
+      "count": 6,
+      "ratio": 0.1765,
+      "risk_level": "low",
+      "score_contribution": 0.0
+    },
+    {
+      "category": "球员舆论",
+      "count": 4,
+      "ratio": 0.1176,
+      "risk_level": "low",
+      "score_contribution": 0.88
+    },
+    {
+      "category": "球迷文化舆论",
+      "count": 2,
+      "ratio": 0.0588,
+      "risk_level": "low",
+      "score_contribution": 0.0
+    },
+    {
+      "category": "球队状态舆论",
+      "count": 1,
+      "ratio": 0.0294,
+      "risk_level": "low",
+      "score_contribution": 0.0
+    },
+    {
+      "category": "球迷舆论风险",
+      "count": 1,
+      "ratio": 0.0294,
+      "risk_level": "low",
+      "score_contribution": 1.76
+    },
+    {
+      "category": "赛事宣传舆论",
+      "count": 1,
+      "ratio": 0.0294,
+      "risk_level": "low",
+      "score_contribution": 0.0
+    },
+    {
+      "category": "赛事推广舆论",
+      "count": 1,
+      "ratio": 0.0294,
+      "risk_level": "low",
+      "score_contribution": 0.0
+    },
+    {
+      "category": "规则争议风险",
+      "count": 1,
+      "ratio": 0.0294,
+      "risk_level": "medium",
+      "score_contribution": 2.79
+    },
+    {
+      "category": "赛事前瞻舆论",
+      "count": 1,
+      "ratio": 0.0294,
+      "risk_level": "low",
+      "score_contribution": 0.0
+    },
+    {
+      "category": "俱乐部治理风险",
+      "count": 1,
+      "ratio": 0.0294,
+      "risk_level": "medium",
+      "score_contribution": 4.12
+    },
+    {
+      "category": "转播服务舆论",
+      "count": 1,
+      "ratio": 0.0294,
+      "risk_level": "low",
+      "score_contribution": 0.0
+    },
+    {
+      "category": "青训舆论风险",
+      "count": 1,
+      "ratio": 0.0294,
+      "risk_level": "low",
+      "score_contribution": 4.12
+    },
+    {
+      "category": "赛程舆论",
+      "count": 1,
+      "ratio": 0.0294,
+      "risk_level": "low",
+      "score_contribution": 0.0
+    },
+    {
+      "category": "俱乐部管理舆论风险",
+      "count": 1,
+      "ratio": 0.0294,
+      "risk_level": "low",
+      "score_contribution": 2.35
+    },
+    {
+      "category": "比赛节奏舆论",
+      "count": 1,
+      "ratio": 0.0294,
+      "risk_level": "low",
+      "score_contribution": 1.76
+    },
+    {
+      "category": "球迷文化争议风险",
+      "count": 1,
+      "ratio": 0.0294,
+      "risk_level": "medium",
+      "score_contribution": 0.44
+    },
+    {
+      "category": "政策通知",
+      "count": 1,
+      "ratio": 0.0294,
+      "risk_level": "low",
+      "score_contribution": 0.0
+    },
+    {
+      "category": "联赛舆论风险",
+      "count": 1,
+      "ratio": 0.0294,
+      "risk_level": "low",
+      "score_contribution": 1.76
+    }
+  ],
+  "entity_counts": {
+    "中国U15男足": 1,
+    "裁判": 6,
+    "足协": 3,
+    "国安": 1,
+    "北京国安": 2,
+    "孙杨": 1,
+    "FIFA国际足联": 1,
+    "中国足协": 2,
+    "中国足球": 1,
+    "中足联": 1,
+    "伤病潮": 1,
+    "新人培养计划": 1,
+    "国网山东省电力公司": 1,
+    "山东泰山": 1,
+    "济南文旅": 1,
+    "股权结构": 1,
+    "鲁能集团": 1,
+    "彭啸": 1,
+    "李源一": 1,
+    "黄政宇": 1,
+    "武汉三镇B队": 1,
+    "武汉三镇一线队": 1,
+    "VAR": 4,
+    "北京国安俱乐部": 1,
+    "裁判争议": 5,
+    "裁判员": 1,
+    "奥乌苏": 1,
+    "中超争议": 1,
+    "主教练": 1,
+    "俱乐部": 1,
+    "教练": 1,
+    "柏杨": 1,
+    "王刚": 1,
+    "天津津门虎": 1,
+    "点球": 2,
+    "红牌": 2,
+    "越位": 1,
+    "中超": 2,
+    "直播": 1,
+    "网络乞丐": 1,
+    "球员": 1,
+    "球迷": 1,
+    "记者": 1
+  },
+  "trend_description": "舆情存在升温迹象，裁判争议风险需重点监测，建议加强应对准备。",
+  "generated_at": "2026-05-05T23:07:01.078521"
+}
