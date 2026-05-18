@@ -1,0 +1,35 @@
+{
+  "meta": {
+    "keyword": "中超联赛",
+    "date_range": "2026-05-11 to 2026-05-18",
+    "actual": 2,
+    "llm_called": 9,
+    "llm_failed": 0
+  },
+  "data": [
+    {
+      "mid": "5299929792907819",
+      "raw_text": "<a href=\"/weibo?q=%23%E8%B1%86%E5%8C%85%E5%BC%80%E5%A7%8B%E6%94%B6%E8%B4%B9%E8%B0%81%E6%85%8C%E4%BA%86%23\" target=\"_blank\">#豆包开始收费谁慌了#</a>，<a href=\"/weibo?q=%23AI%E6%94%B6%E8%B4%B9%E5%AF%B9%E6%99%AE%E9%80%9A%E4%BA%BA%E6%98%AF%E4%B8%80%E4%BB%B6%E5%A5%BD%E4%BA%8B%23\" target=\"_blank\">#AI收费对普通人是一件好事#</a>我不怕，只要不影响我爆改我鹏帅哥们的发型就好（我是黑粉<img src=\"https://face.t.sinajs.cn/t4/appstyle/expression/ext/normal/af/201810_ku_mobile.png\" title=\"[酷]\" alt=\"[酷]\" class=\"face\">）。如果这项业务开始收费，我就弃用豆包呗<a href=\"/weibo?q=%23%E6%B7%B1%E5%9C%B3%E6%96%B0%E9%B9%8F%E5%9F%8E%23\" target=\"_blank\">#深圳新鹏城#</a><a href=\"/weibo?q=%23%E4%B8%AD%E8%B6%85%E8%81%94%E8%B5%9B%23\" target=\"_blank\">#中超联赛#</a> ​                ",
+      "clean_text": "#豆包开始收费谁慌了#，#AI收费对普通人是一件好事#我不怕，只要不影响我爆改我鹏帅哥们的发型就好（我是黑粉）。如果这项业务开始收费，我就弃用豆包呗#深圳新鹏城##中超联赛#",
+      "source_backend": "dom_fallback",
+      "username": "茉莉",
+      "crawl_time": "2026-05-18T16:12:22.580064",
+      "parsed_time": "2026-05-18 14:19:00",
+      "relevance_confidence": 0.4603,
+      "football_related": false,
+      "rejection_reason": "语义模型相似度低于阈值 0.55，判定为非足球 (pos=0.460, neg=0.509, score=0.460)"
+    },
+    {
+      "mid": "5299924914930759",
+      "raw_text": "\n                    转发微博                ",
+      "clean_text": "转发微博",
+      "source_backend": "dom_fallback",
+      "username": "杨翼",
+      "crawl_time": "2026-05-18T16:12:22.622233",
+      "parsed_time": "2026-05-18 14:00:00",
+      "relevance_confidence": 0.4265,
+      "football_related": false,
+      "rejection_reason": "语义模型相似度低于阈值 0.55，判定为非足球 (pos=0.427, neg=0.519, score=0.427)"
+    }
+  ]
+}

@@ -4,6 +4,11 @@ from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
 
+from utils.analysis_helpers import (
+    flatten_insight_text,
+    normalize_insight_payload,
+    summarize_high_risk_categories,
+)
 from utils.llm_client import try_llm_client
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
@@ -237,11 +242,16 @@ def generate_insight_llm(warning_data, risk_data, client):
     score = warning_data.get("total_score", 0)
     level = warning_data.get("risk_level", "low")
     dominant = warning_data.get("dominant_risk", "暂无")
+    alert_focus = warning_data.get("alert_focus", dominant)
     trend = warning_data.get("trend_description", "")
-    negative_rate = warning_data.get("meta", {}).get("negative_rate", 0)
-    high_count = risk_data.get("meta", {}).get("high_risk_count", 0)
-    medium_count = risk_data.get("meta", {}).get("medium_risk_count", 0)
-    actual = risk_data.get("meta", {}).get("actual", 0)
+    wmeta = warning_data.get("meta", {}) or {}
+    negative_rate = wmeta.get("negative_rate", 0)
+    tone_label = wmeta.get("sentiment_tone", "未知")
+    positive_count = wmeta.get("positive_count", 0)
+    sample_caveat = wmeta.get("sample_caveat", False)
+    high_count = wmeta.get("high_risk_count") or risk_data.get("meta", {}).get("high_risk_count", 0)
+    medium_count = wmeta.get("medium_risk_count") or risk_data.get("meta", {}).get("medium_risk_count", 0)
+    actual = wmeta.get("actual") or risk_data.get("meta", {}).get("actual", 0)
     entity_counts = warning_data.get("entity_counts", {})
     top_entities = sorted(entity_counts.items(), key=lambda x: x[1], reverse=True)[:6]
     entity_str = "、".join(f"{k}({v}次)" for k, v in top_entities) if top_entities else "无"
@@ -253,26 +263,44 @@ def generate_insight_llm(warning_data, risk_data, client):
             category_counts[cat] = category_counts.get(cat, 0) + 1
     cat_str = "；".join(f"{k} {v}条" for k, v in sorted(category_counts.items(), key=lambda x: x[1], reverse=True)[:5])
 
+    posts = risk_data.get("data", []) if risk_data else []
+    high_info = summarize_high_risk_categories(posts)
+    allow_emergency = high_count > 0
+    allow_sensitive_alarm = bool(
+        wmeta.get("high_risk_has_sensitive") or high_info["has_sensitive"]
+    )
+
     system_prompt = (
         "你是中国足协舆情监测中心的资深分析师。请根据以下监测数据，撰写一份供信息部门领导审阅的舆情研判摘要。"
         "要求：\n"
-        "1. 摘要 350~450 字，分三段：①总体态势（评分、等级、情绪基调）；②核心矛盾点（主导风险、高频实体、ABSA 关键对象）；③传播与升级风险（时间集中度、是否可能外溢）。\n"
-        "2. 处置建议分四档输出 JSON 数组："
-        "emergency（0-2h，必须立即执行）、short（24h 内）、medium（本周）、long（机制建设）。"
-        "每档 1-2 条，共 5-6 条建议，必须具体到责任口（如裁判部、公关部、联赛部、青训部）。\n"
-        "3. 输出严格 JSON：summary（字符串）、theme_analysis（对象，键为风险类别，值为 80 字分析）、"
-        "suggestions（对象，键为 emergency/short/medium/long，值为字符串数组）。"
+        "1. 摘要 300~400 字，分三段：①总体态势（评分、等级、须与给出的情绪基调一致）；"
+        "②讨论焦点（「主导话题」为发帖量最多类别，「风险焦点」为中高风险集中类别，二者可能不同）；"
+        "③升级风险（须基于高风险条数，勿夸大）。\n"
+        "2. 情绪基调必须与数据一致：若基调为偏正面，不得写「情绪偏负面」或「负面情绪集中」。\n"
+        "3. 无高风险条数时 emergency 必须为空数组。"
+        "4. theme_analysis 的每个值为 80 字以内的纯字符串（禁止返回对象或数组）。"
+        "5. suggestions 每档为字符串数组，每条为一句完整建议（禁止返回 action/responsibility 等嵌套字段）。"
+        "5b. 必须填写 short、medium、long 三档，每档至少 1 条；emergency 仅在有高风险条数时填写。"
+        "6. emergency 建议须针对「高风险类别分布」中的实际类别撰写；"
+        "除非监测到敏感事件类高风险，否则禁止提及假球、黑哨、赌球、操纵比赛等词。\n"
+        "7. 勿使用「升温」「爆发」等词，除非数据明确支持。\n"
+        "8. 输出严格 JSON：summary（字符串）、theme_analysis（对象）、suggestions（对象）。"
     )
 
     nr = negative_rate if isinstance(negative_rate, (int, float)) else 0.0
     user_content = (
-        f"监测周期：{warning_data.get('meta', {}).get('date_range', '未知')} | 样本量：{actual} 条\n"
+        f"监测周期：{wmeta.get('date_range', '未知')} | 样本量：{actual} 条"
+        f"{'（小样本，结论宜保守）' if sample_caveat else ''}\n"
         f"总评分：{score}，风险等级：{level}\n"
-        f"主导风险：{dominant}\n"
-        f"负面率：{nr:.1%} | 高风险：{high_count} 条 | 中风险：{medium_count} 条\n"
+        f"主导话题（按发帖量）：{dominant}\n"
+        f"风险焦点（中高风险集中）：{alert_focus}\n"
+        f"情绪基调：{tone_label}（正面约 {positive_count} 条）| 负面率：{nr:.1%}\n"
+        f"高风险：{high_count} 条 | 中风险：{medium_count} 条 | 允许 emergency 建议：{'是' if allow_emergency else '否'}\n"
+        f"高风险类别分布：{high_info['summary']}\n"
+        f"是否含敏感事件类高风险：{'是' if allow_sensitive_alarm else '否'}\n"
         f"风险类别分布：{cat_str}\n"
         f"高频风险实体：{entity_str}\n"
-        f"趋势判断：{trend}"
+        f"系统趋势判断（请与之保持一致，勿矛盾）：{trend}"
     )
 
     result = client.chat_json(
@@ -284,96 +312,170 @@ def generate_insight_llm(warning_data, risk_data, client):
     )
     if not isinstance(result, dict):
         return None
+    return normalize_insight_payload(
+        result, allow_sensitive_alarm=allow_sensitive_alarm
+    )
+
+
+_RISK_LEVEL_ORDER = {"high": 0, "medium": 1, "low": 2}
+_SENTIMENT_NEG_FIRST = {
+    "强烈负面": 0,
+    "轻微负面": 1,
+    "中性": 2,
+    "轻微正面": 3,
+    "强烈正面": 4,
+}
+
+
+def posts_for_risk_appendix(posts, limit: int = 20):
+    """附录表：先 high → medium → low，同等级内负面情感优先。"""
+
+    def sort_key(post: dict):
+        lvl = _RISK_LEVEL_ORDER.get(post.get("risk_level", "low"), 3)
+        sent = _SENTIMENT_NEG_FIRST.get(post.get("sentiment", "中性"), 2)
+        return (lvl, sent)
+
+    return sorted(posts, key=sort_key)[:limit]
+
+
+def rule_suggestion_tiers(warning_data, risk_data) -> dict:
+    """规则模板四档处置建议（供 LLM 缺档时补齐）。"""
+    level = warning_data.get("risk_level", "low") if warning_data else "low"
+    dominant = warning_data.get("dominant_risk", "暂无") if warning_data else "暂无"
+    alert_focus = (warning_data or {}).get("alert_focus", dominant)
+    wmeta = (warning_data or {}).get("meta", {}) or {}
+    high_count = wmeta.get("high_risk_count") or (
+        risk_data.get("meta", {}).get("high_risk_count", 0) if risk_data else 0
+    )
+    medium_count = wmeta.get("medium_risk_count") or (
+        risk_data.get("meta", {}).get("medium_risk_count", 0) if risk_data else 0
+    )
+
+    posts = risk_data.get("data", []) if risk_data else []
+    high_info = summarize_high_risk_categories(posts)
+    has_sensitive = high_info["has_sensitive"]
+
+    if high_count > 0:
+        if has_sensitive:
+            emergency = [
+                "【竞赛部+公关部】对敏感事件类高风险博文逐条核实，2 小时内完成内部通报并评估是否需对外说明。",
+            ]
+        else:
+            emergency = [
+                f"【公关部+联赛部】针对高风险类别（{high_info['summary']}）逐条核实事实，"
+                f"2 小时内完成内部通报与口径准备。",
+            ]
+        return {
+            "emergency": emergency,
+            "short": [
+                "【媒体监测组】24 小时内跟踪高风险话题的传播路径与关键转发节点。",
+            ],
+            "medium": [
+                "【信息中心】本周复盘高风险判定的准确率，优化关键词与 ABSA 规则。",
+            ],
+            "long": [
+                "【联赛部】完善赛后信息沟通机制，减少信息真空引发的猜测性讨论。",
+            ],
+        }
+    if level == "medium":
+        return {
+            "emergency": [],
+            "short": [
+                f"【媒体监测组】跟踪「{alert_focus}」相关讨论的后续走向，记录 KOL 与球迷情绪变化。",
+            ],
+            "medium": [
+                "【联赛部】关注下一比赛日现场与线上的联动话题，防止争议线下化。",
+            ],
+            "long": [
+                "【信息中心】定期更新监测关键词与语义过滤规则，降低同质词噪声。",
+            ],
+        }
     return {
-        "summary": result.get("summary", ""),
-        "theme_analysis": result.get("theme_analysis", {}),
-        "suggestions": {
-            k: [str(s) for s in v] if isinstance(v, list) else [str(v)]
-            for k, v in result.get("suggestions", {}).items()
-        },
+        "emergency": [],
+        "short": ["【公关部】可择机发布训练花絮或球员专访等正向内容。"],
+        "medium": ["【联赛部】定期复盘监测关键词库，补充新热词。"],
+        "long": ["【信息中心】积累本周期基线数据，用于后续阈值校准。"],
     }
+
+
+def fill_missing_suggestion_tiers(insight, warning_data, risk_data):
+    """LLM 未返回的 short/medium/long（或 emergency）用规则模板补缺，不覆盖已有内容。"""
+    if not insight or not warning_data or not risk_data:
+        return insight
+    fallback = rule_suggestion_tiers(warning_data, risk_data)
+    sugg = insight.setdefault("suggestions", {})
+    for key in ("emergency", "short", "medium", "long"):
+        if sugg.get(key):
+            continue
+        tier = fallback.get(key) or []
+        if tier:
+            sugg[key] = list(tier)
+    return insight
 
 
 def generate_insight_rule(warning_data, risk_data):
     level = warning_data.get("risk_level", "low") if warning_data else "low"
     dominant = warning_data.get("dominant_risk", "暂无") if warning_data else "暂无"
-    high_count = risk_data.get("meta", {}).get("high_risk_count", 0) if risk_data else 0
-    medium_count = risk_data.get("meta", {}).get("medium_risk_count", 0) if risk_data else 0
+    alert_focus = (warning_data or {}).get("alert_focus", dominant)
+    wmeta = (warning_data or {}).get("meta", {}) or {}
+    tone = wmeta.get("sentiment_tone", "中性为主")
+    high_count = wmeta.get("high_risk_count") or (risk_data.get("meta", {}).get("high_risk_count", 0) if risk_data else 0)
+    medium_count = wmeta.get("medium_risk_count") or (risk_data.get("meta", {}).get("medium_risk_count", 0) if risk_data else 0)
+    trend = (warning_data or {}).get("trend_description", "")
 
     theme_analysis = {}
     for p in risk_data.get("data", []) if risk_data else []:
         cat = p.get("risk_category", "一般舆情")
         if cat not in theme_analysis:
-            theme_analysis[cat] = {"count": 0, "sample": ""}
+            theme_analysis[cat] = {"count": 0, "high": 0, "medium": 0}
         theme_analysis[cat]["count"] += 1
-        if not theme_analysis[cat]["sample"] and p.get("clean_text"):
-            theme_analysis[cat]["sample"] = p.get("clean_text", "")[:40] + "…"
+        if p.get("risk_level") == "high":
+            theme_analysis[cat]["high"] += 1
+        elif p.get("risk_level") == "medium":
+            theme_analysis[cat]["medium"] += 1
 
     theme_text = {}
     for cat, info in sorted(theme_analysis.items(), key=lambda x: x[1]["count"], reverse=True)[:4]:
-        if "敏感" in cat or "风险" in cat:
-            theme_text[cat] = f"该类别共 {info['count']} 条，涉及敏感信号或争议判罚，情绪偏负面，需重点跟踪后续发酵。"
+        if info["high"] or info["medium"]:
+            theme_text[cat] = (
+                f"共 {info['count']} 条，其中高风险 {info['high']} 条、中风险 {info['medium']} 条，"
+                f"建议结合具体博文复核，不宜仅凭类别名判断严重程度。"
+            )
         else:
-            theme_text[cat] = f"该类别共 {info['count']} 条，以中性或正面讨论为主，暂无升级迹象，保持常规监测即可。"
+            theme_text[cat] = (
+                f"共 {info['count']} 条，均为低风险讨论，情绪基调与整体监测一致（{tone}），保持常规监测即可。"
+            )
 
-    if level == "high" or high_count > 0:
+    focus_note = (
+        f"发帖量最多的是「{dominant}」"
+        + (f"，中高风险较集中的是「{alert_focus}」。" if alert_focus != dominant else "。")
+    )
+
+    posts = risk_data.get("data", []) if risk_data else []
+    high_info = summarize_high_risk_categories(posts)
+    has_sensitive = high_info["has_sensitive"]
+    suggestions = rule_suggestion_tiers(warning_data, risk_data)
+
+    if high_count > 0:
         summary = (
-            f"本次监测周期内舆情评分较高，出现 {high_count} 条高风险微博，主导风险为「{dominant}」。"
-            f"敏感事件（假球/黑哨相关）已触发舆情红线，负面情绪集中且存在外溢至主流媒体的潜在可能。"
-            f"中风险层面存在 {medium_count} 条裁判争议类内容，形成叠加效应，建议立即启动应急响应。"
+            f"本次监测出现 {high_count} 条高风险微博（{high_info['summary']}），{focus_note}"
+            f"整体情绪基调为{tone}。{trend}"
         )
-        suggestions = {
-            "emergency": [
-                "【公关部+裁判部】立即核实高风险微博涉及的判罚或事件真实性，准备官方声明模板，2小时内完成初稿。",
-                "【联赛部】启动关键词全网监控，追踪假球、黑哨等敏感词在微博、抖音、虎扑的扩散路径与KOL介入情况。",
-            ],
-            "short": [
-                "【俱乐部联络口】统一向各俱乐部发送口径指引，避免球员、教练在赛前/赛后采访引发二次舆情。",
-                "【媒体监测组】24小时内提交《舆情扩散路径简报》，标注首发账号、转发峰值时段与关键评论。",
-            ],
-            "medium": [
-                "【裁判部】本周内组织内部复盘会，针对 VAR/漏判争议点形成技术性说明材料，择机通过官方渠道释疑。",
-                "【法务部】评估高风险内容中涉嫌诽谤、造谣的信息，准备律师函或平台投诉材料。",
-            ],
-            "long": [
-                "【信息中心】将本次事件纳入季度舆情案例库，优化假球、黑哨、裁判争议等关键词监测模型与阈值。",
-                "【联赛部】推动建立赛后 30 分钟快速沟通机制，减少因信息真空导致的舆论猜测。",
-            ],
-        }
     elif level == "medium":
         summary = (
-            f"监测显示舆情以「{dominant}」为主，存在局部升温迹象，尚未触及敏感红线，但需加强跟踪以防发酵。"
-            f"共 {medium_count} 条中风险内容，主要围绕裁判判罚与球员表现展开，负面情绪占比可控。"
+            f"舆情评分处于中等水平，{focus_note}"
+            f"共 {medium_count} 条中风险内容。情绪基调为{tone}，未见高风险集中。{trend}"
         )
-        suggestions = {
-            "emergency": [
-                "【裁判部】对争议判罚进行内部快速复核，确认是否存在明显错漏判，1小时内形成内部备忘录。",
-            ],
-            "short": [
-                "【媒体监测组】跟踪主导风险话题的后续讨论，记录关键意见领袖（KOL）观点与球迷情绪拐点。",
-                "【俱乐部联络口】收集涉事俱乐部/球员的公关诉求，准备针对性回应素材。",
-            ],
-            "medium": [
-                "【联赛部】在下一比赛日加强现场安保与媒体接待，防止线下事件线上化。",
-                "【信息中心】复盘本次监测中模型误判/漏判案例，优化 aspect 抽取准确率。",
-            ],
-            "long": [
-                "【青训部/联赛部】利用舆情平稳期，发布正向内容（训练花絮、球员专访），巩固粉丝基本盘。",
-            ],
-        }
     else:
         summary = (
-            f"整体舆情平稳，以战术讨论和球员表现为主，「{dominant}」虽为数量最多标签，但无实质风险信号。"
-            f"未发现敏感事件或群体性负面情绪，可维持常规监测频率。"
+            f"整体舆情平稳，{focus_note}"
+            f"情绪基调为{tone}，未发现需紧急处置的高风险信号。{trend}"
         )
-        suggestions = {
-            "emergency": ["【信息中心】保持常规值班，关注潜在敏感话题的早期苗头。"],
-            "short": ["【公关部】利用正面舆情窗口，发布球队训练花絮或球员专访，巩固粉丝黏性。"],
-            "medium": ["【联赛部】定期复盘监测关键词库，补充新出现的球队、球员或赛事热词。"],
-            "long": ["【信息中心】建立季度舆情健康度基线报告，为后续风险阈值调整提供数据支撑。"],
-        }
 
-    return {"summary": summary, "theme_analysis": theme_text, "suggestions": suggestions}
+    return normalize_insight_payload(
+        {"summary": summary, "theme_analysis": theme_text, "suggestions": suggestions},
+        allow_sensitive_alarm=has_sensitive if high_count > 0 else False,
+    )
 
 
 # ==================== 主逻辑 ====================
@@ -405,6 +507,10 @@ def run_report_html(
     score = warning_data.get("total_score", "暂无") if warning_data else "暂无"
     level = warning_data.get("risk_level", "暂无") if warning_data else "暂无"
     dominant = warning_data.get("dominant_risk", "暂无") if warning_data else "暂无"
+    alert_focus = warning_data.get("alert_focus", dominant) if warning_data else dominant
+    sentiment_tone = (
+        warning_data.get("meta", {}).get("sentiment_tone", "暂无") if warning_data else "暂无"
+    )
     trend = warning_data.get("trend_description", "暂无") if warning_data else "暂无"
     negative_rate = warning_data.get("meta", {}).get("negative_rate", "暂无") if warning_data else "暂无"
     top_entities = warning_data.get("entity_counts", {}) if warning_data else {}
@@ -443,13 +549,15 @@ def run_report_html(
                 insight_from_llm = True
     if not insight:
         insight = generate_insight_rule(warning_data, risk_data)
+    elif warning_data and risk_data:
+        insight = fill_missing_suggestion_tiers(insight, warning_data, risk_data)
 
     summary_html = f"<p style='line-height:1.8;color:#374151;'>{insight['summary']}</p>" if insight else "<div class='no-data'>暂无分析数据</div>"
 
     theme_blocks = []
     if insight and insight.get("theme_analysis"):
         for cat, analysis in insight["theme_analysis"].items():
-            analysis_text = analysis if isinstance(analysis, str) else str(analysis)
+            analysis_text = flatten_insight_text(analysis)
             theme_blocks.append(f"""
             <div style="margin-bottom:10px;padding:10px 14px;background:#f9fafb;border-radius:8px;border-left:3px solid #2e4668;">
                 <div style="font-weight:600;color:#1f2937;font-size:14px;margin-bottom:4px;">{cat}</div>
@@ -480,7 +588,7 @@ def run_report_html(
 
     risk_rows = []
     if posts:
-        for item in posts[:20]:
+        for item in posts_for_risk_appendix(posts, limit=20):
             mid = item.get("mid", "")
             cat = item.get("risk_category", "")
             lvl = item.get("risk_level", "")
@@ -563,7 +671,9 @@ def run_report_html(
   <h2>核心指标看板</h2>
   <div class="metric-grid">
     {make_metric("总评分", score)}
-    {make_metric("主导风险", dominant)}
+    {make_metric("主导话题", dominant)}
+    {make_metric("风险焦点", alert_focus if alert_focus != dominant else "—")}
+    {make_metric("情绪基调", sentiment_tone)}
     {make_metric("高风险条数", high_risk_count)}
     {make_metric("负面率", f"{negative_rate:.1%}" if isinstance(negative_rate, (int, float)) else negative_rate)}
     {make_metric("中风险条数", medium_risk_count)}
@@ -640,7 +750,7 @@ def run_report_html(
     </tbody>
   </table>
   <div style="margin-top:10px;font-size:12px;color:#9ca3af;">
-    * 完整数据请查阅同目录下的 risk_*.json 与 warning_*.json 源文件。
+    * 附录按风险等级（high → medium → low）及负面情感优先排序，仅展示前 20 条；完整数据请查阅 risk_*.json 与 warning_*.json。
   </div>
 </div>
 

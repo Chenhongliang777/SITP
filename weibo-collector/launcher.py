@@ -4,7 +4,6 @@ launcher.py
 足球舆情监测流水线统一启动器（含微博登录子命令：python launcher.py login）
 """
 import argparse
-import asyncio
 import json
 import os
 import re
@@ -99,20 +98,22 @@ def find_latest_file(directory: Path, prefix: str, keyword: str, ext: str = "jso
 
 
 def check_env() -> None:
-    env_path = SCRIPT_DIR / ".env"
-    if not env_path.exists():
-        print("\n❌ 启动失败：未找到 .env 配置文件")
-        print("-" * 50)
-        print("请在项目根目录创建 .env 文件，并写入：")
-        print('    DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx')
-        print("-" * 50)
-        sys.exit(1)
+    try:
+        from app.config import bootstrap, require_api_key
 
-    load_dotenv(dotenv_path=env_path)
-    api_key = os.getenv("DEEPSEEK_API_KEY", "").strip()
-    if not api_key:
-        print("\n❌ 启动失败：.env 中未配置 DEEPSEEK_API_KEY")
-        print("请在 .env 中添加：DEEPSEEK_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxx")
+        bootstrap()
+        require_api_key()
+    except ImportError:
+        env_path = SCRIPT_DIR / ".env"
+        if not env_path.exists():
+            print("\n❌ 启动失败：未找到 .env 配置文件")
+            sys.exit(1)
+        load_dotenv(dotenv_path=env_path)
+        if not os.getenv("DEEPSEEK_API_KEY", "").strip():
+            print("\n❌ 启动失败：.env 中未配置 API Key")
+            sys.exit(1)
+    except RuntimeError as e:
+        print(f"\n❌ 启动失败：{e}")
         sys.exit(1)
     print("✅ 环境校验通过：已加载 .env，API Key 已配置\n")
 
@@ -198,64 +199,6 @@ def run_step(step: dict, ctx, last_output: Path = None) -> Path:
     print(f"   输出: {out_file.name}（{out_file.stat().st_size // 1024} KB）")
     print(f"✅ 步骤 [{name}] 完成\n")
     return out_file
-
-
-async def save_weibo_login_state() -> None:
-    """保存微博登录态至 data/weibo_auth.json。"""
-    from playwright.async_api import async_playwright
-
-    state_file = DATA_DIR / "weibo_auth.json"
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-    print("=" * 50)
-    print("微博登录态保存工具（launcher login）")
-    print("=" * 50)
-
-    async with async_playwright() as p:
-        try:
-            browser = await p.chromium.launch(
-                headless=False,
-                channel="chrome",
-                args=["--disable-blink-features=AutomationControlled"],
-            )
-            print("已启动系统 Chrome")
-        except Exception as e:
-            print(f"未检测到系统 Chrome，回退到 Chromium: {e}")
-            browser = await p.chromium.launch(
-                headless=False,
-                args=["--disable-blink-features=AutomationControlled"],
-            )
-
-        context = await browser.new_context(
-            viewport={"width": 1280, "height": 800},
-            locale="zh-CN",
-            timezone_id="Asia/Shanghai",
-        )
-        page = await context.new_page()
-
-        print("正在打开微博...")
-        await page.goto("https://weibo.com", wait_until="domcontentloaded")
-        await asyncio.sleep(5)
-
-        current_url = page.url
-        print(f"当前页面: {current_url}")
-
-        if "login" in current_url or "newlogin" in current_url:
-            print("请在新打开的浏览器窗口中扫码登录")
-        else:
-            print("如果未看到登录二维码，请手动刷新页面或访问 weibo.com/login")
-
-        input("\n完成扫码登录后，按回车键保存状态...")
-
-        await context.storage_state(path=str(state_file))
-        print(f"\n登录态已保存: {state_file}")
-
-        cookies = await context.cookies()
-        key_names = {"SUB", "SUBP", "SCF", "ALF"}
-        found = [c["name"] for c in cookies if c["name"] in key_names]
-        print(f"检测到关键 Cookie: {found}")
-
-        await browser.close()
 
 
 def main():
@@ -394,6 +337,8 @@ def main():
 
 if __name__ == "__main__":
     if len(sys.argv) >= 2 and sys.argv[1] == "login":
-        asyncio.run(save_weibo_login_state())
+        from login import main as login_main
+
+        login_main()
         sys.exit(0)
     main()

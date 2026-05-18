@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 from dotenv import load_dotenv
 
+from utils.analysis_helpers import keyword_false_positive_reason
 from utils.llm_client import try_llm_client
 from utils.runtime import get_llm_max_workers, get_semantic_encode_batch
 
@@ -231,6 +232,9 @@ def run_semantic_filter(
         if not text:
             post["football_related"] = False
             reason = f"空文本 ({detail})"
+        elif fp_reason := keyword_false_positive_reason(text, keyword):
+            post["football_related"] = False
+            reason = f"关键词同质词过滤: {fp_reason} ({detail})"
         elif score >= POSITIVE_THRESHOLD:
             post["football_related"] = True
             reason = f"语义模型正相似度高于阈值 {POSITIVE_THRESHOLD} ({detail})"

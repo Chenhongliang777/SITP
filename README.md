@@ -49,13 +49,35 @@ python -m playwright install --with-deps chromium
 ## 4. 启动方式
 ### 4.1 登录微博（首次/Token 过期时）
 
+**图形界面（推荐，M1）：**
+
 ```bash
-python launcher.py login
+cd weibo-collector
+python gui_main.py
 ```
 
-脚本会启动系统 Chrome，请手动扫码登录微博，然后在终端按回车保存登录态至 `data/weibo_auth.json`。采集步骤会自动加载该文件。
+在「微博登录」页打开浏览器扫码，完成后点击「确认已登录并保存」。
 
-### 4.2 运行完整流水线（推荐：`launcher.py`）
+**命令行：**
+
+```bash
+python launcher.py login
+# 或
+python login.py
+```
+
+登录态保存至 `data/weibo_auth.json`，采集步骤会自动加载。
+
+### 4.2 桌面 GUI 一键监测（M1）
+
+```bash
+cd weibo-collector
+python gui_main.py
+```
+
+在「设置」中配置 API Key 与模型预设；在「监测任务」填写关键词、日期、条数，可选「高效模式」，点击「开始监测」。完成后自动打开 HTML 报告。
+
+### 4.3 运行完整流水线（命令行：`launcher.py`）
 
 在 **`weibo-collector/`** 目录下执行：
 
@@ -139,64 +161,8 @@ python launcher.py --keyword "中超" --start-date 2026-04-28 --end-date 2026-04
 
 **说明**：开启 `--efficient` 且未加 `--no-sentiment-llm-fallback` 时，**情感仍以本地模型为主**；仅当批量/单条推理失败时仍可能触发 **LLM 回退**。超长文本已在 `sentiment_model.py` 中按模型上限截断，以降低失败率。环境变量 `SEMANTIC_ENCODE_BATCH`、`SENTIMENT_BATCH`（见 `utils/runtime.py`）可微调本地批大小，可与上述参数叠加。
 
-## 5. 已知问题与优化方向
-本项目已具备基本可用性，但仍存在以下待改善之处：
 
-### 5.1 负面率数据缺失
-warner_score.py 的元数据未计算 negative_rate，导致报告中“负面率”指标始终显示“暂无”。
 
-修复：在 warner_score.py 的 meta 中添加 "negative_rate": round(negative_count/total, 4)。
 
-### 5.2 代码冗余（现状与后续方向）
-
-**现状（与早期版本相比已有收敛）**  
-HTTP 层已主要通过 `weibo-collector/utils/llm_client.py`（如 `try_llm_client`、`chat_json`、`chat_text`）访问兼容 OpenAI 风格的接口；`semantic_filter.py`、`sentiment_model.py`、`topic_cluster.py`、`absa_extractor.py`、`risk_scanner.py`、`report_html.py` 等均通过该封装发起调用，**不再在各脚本内重复维护一套独立的 DeepSeek `requests` 拼接逻辑**。
-
-**仍存在的冗余**  
-与业务强相关的 **提示词模板、JSON 解析与字段校验、失败后的规则回退** 仍分散在各模块，属于「逻辑样板」层面的重复；若启用远端向量，`utils/embedder.py` 中另有请求与环境变量读取，可与 LLM 配置进一步统一。
-
-**后续可选优化**  
-提炼少量公共辅助函数（例如统一的「短回复 JSON 任务」封装），或扩展 `llm_client` 的薄封装，以减少各文件中的重复样板代码。
-
-**哪些环节可以放弃 LLM（换效率、略降质量）**  
-以下均对应 `python launcher.py …` 的开关；关闭后该环节不再发起对应 LLM 请求，而走规则、TF-IDF 或本地模型路径（详见各脚本 `--help`）。与 **`--fast-collect`、`--target-count`、`--llm-workers` 的组合用法** 见 **§4.3 高效模式**。
-
-| 环节 | 作用说明 | 启动参数 |
-|------|----------|----------|
-| 语义过滤（相似度灰区） | 向量模型不确定时，不再调用 LLM 判定是否足球相关，改为阈值启发式 | `--no-llm` |
-| 语义过滤（灰区严弃） | 灰区一律判非足球并丢弃（不调 LLM、不用启发式捞回） | `--semantic-gray-reject` |
-| 主题聚类（簇命名） | 簇标签仅用 TF-IDF 关键词，不调用 LLM 生成主题名 | `--tfidf-topic-only` |
-| 方面级情感（ABSA） | 仅用规则 / jieba 路径，不调用 LLM 抽取 | `--rule-absa` |
-| 风险扫描 | 仅用规则与硬规则，不调用 LLM 判定风险类别与等级 | `--rule-risk-only` |
-| HTML 报告（研判摘要等） | 报告中的 LLM 研判摘要等改为规则模板，不调用 LLM | `--rule-report-only` |
-| 情感分析（失败回退） | 模型加载失败或单条推理失败时**不**调用 LLM，使用默认中性兜底 | `--no-sentiment-llm-fallback` |
-| 一键关闭多环节 LLM | 等价于同时开启上表中 `--no-llm` 与三项 `rule-*` 及 `--tfidf-topic-only` | `--efficient` |
-
-**说明**：情感在默认配置下以 **本地预训练模型为主**；失败时是否走 LLM 由 **`--no-sentiment-llm-fallback`** 控制（详见 **§4.3**）。
-
-采集（`collector_backend.py`）与纯数值步骤（如 `warner_score.py`）**不涉及 LLM**。
-
-### 5.3 流水线可视性差
-各步骤输出仅以 print 形式打印，缺乏进度条或步骤耗时统计。
-
-建议：集成 tqdm 或丰富的日志格式，便于长时间运行时掌握进度。
-
-### 5.4 采集稳定性依赖微博页面结构
-collector_backend.py 通过多种回退方式（API、移动端、本地缓存）增强了鲁棒性，但微博反爬策略仍可能导致采集失败或数据量不足。
-
-相对时间解析可能产生偏差  
-`preprocess.py` 内联的时间解析（原 time_cleaner 逻辑）在解析「刚刚」「X 分钟前」等相对时间时，依赖从预处理运行时刻推算；若与采集时刻偏差大，可能削弱时间趋势图的可信度。
-
-建议：采集时直接提取微博的绝对时间戳（<a> 标签中常携带）。
-
-### 5.5 ABSA 抽取错误
-规则回退部分对部分目标词（如“本赛季”、“鲁莽”）做了不合理的抽取和情感判定，可能扭曲方面级矩阵。
-
-建议：优化规则词典，或增强 LLM 输出后处理校验。
-
-### 5.6 首次语义模型下载较慢
-若网络不佳，sentence-transformers 下载模型可能超时。
-
-建议：使用 HF_ENDPOINT=https://hf-mirror.com 环境变量加速。
 
 

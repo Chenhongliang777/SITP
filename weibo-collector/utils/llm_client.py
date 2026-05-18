@@ -53,7 +53,7 @@ class LLMClient:
     def __init__(self, config: Optional[LLMConfig] = None) -> None:
         self.config = config or _load_llm_config_from_env()
         if not self.config.api_key:
-            raise ValueError("缺少 DEEPSEEK_API_KEY，请在 .env 中配置")
+            raise ValueError("缺少 API Key，请在应用「设置」中配置并保存")
         # 每线程独立 Session，便于多线程并发时复用连接且避免共享 Session 竞态
         self._thread_local = threading.local()
 

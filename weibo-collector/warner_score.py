@@ -3,6 +3,15 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from utils.analysis_helpers import (
+    build_trend,
+    category_weight_for_scoring,
+    compute_sentiment_tone,
+    pick_alert_focus,
+    pick_dominant_by_count,
+    summarize_high_risk_categories,
+)
+
 SCRIPT_DIR = Path(__file__).parent.resolve()
 DATA_DIR = SCRIPT_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -21,28 +30,6 @@ def classify_risk(total_score: float):
     return "low"
 
 
-def build_trend(total_score: float, high_count: int, dominant_cat: str):
-    if total_score >= 80:
-        return "当前出现敏感事件或高风险集中爆发，建议立即启动应急响应并上报主管部门。"
-    if total_score >= 60:
-        return f"负面舆情强烈，{dominant_cat}为主要矛盾点，建议立即介入并密切跟进传播态势。"
-    if total_score >= 35:
-        return f"舆情存在升温迹象，{dominant_cat}需重点监测，建议加强应对准备。"
-    return "舆情总体平稳，以常规跟踪为主，关注潜在发酵点。"
-
-
-def category_weight(category: str) -> int:
-    """动态权重：根据类别名称语义自动赋权"""
-    cat = category.lower()
-    if "敏感" in cat:
-        return 3
-    if "风险" in cat and "舆论" not in cat:
-        return 2
-    if "负面" in cat:
-        return 1
-    return 0
-
-
 def run_warner(input_path: Path) -> Path:
     with open(input_path, "r", encoding="utf-8") as f:
         payload = json.load(f)
@@ -53,7 +40,6 @@ def run_warner(input_path: Path) -> Path:
     if total == 0:
         raise SystemExit("输入文件中没有数据")
 
-    # ---------- 1. 基础统计 ----------
     high_count = sum(1 for p in posts if p.get("risk_level") == "high")
     medium_count = sum(1 for p in posts if p.get("risk_level") == "medium")
     low_count = total - high_count - medium_count
@@ -61,77 +47,79 @@ def run_warner(input_path: Path) -> Path:
     extreme_neg_count = sum(1 for p in posts if p.get("sentiment") == "强烈负面")
     slight_neg_count = sum(1 for p in posts if p.get("sentiment") == "轻微负面")
 
-    # 风险实体频次
     entity_counts = {}
     for p in posts:
         for ent in p.get("risk_entities", []):
             entity_counts[ent] = entity_counts.get(ent, 0) + 1
 
-    # 风险类别分布
     category_counts = {}
     for p in posts:
         cat = p.get("risk_category", "未分类")
         category_counts[cat] = category_counts.get(cat, 0) + 1
 
-    # ---------- 2. 主导风险（动态加权） ----------
-    weighted_scores = {
-        cat: count * category_weight(cat)
-        for cat, count in category_counts.items()
-    }
-    meaningful = {k: v for k, v in weighted_scores.items() if v > 0}
+    dominant_cat, dominant_count = pick_dominant_by_count(category_counts)
+    alert_cat, alert_count = pick_alert_focus(posts)
+    concentration_ratio = dominant_count / total if total else 0.0
 
-    if meaningful:
-        dominant_cat = max(meaningful, key=meaningful.get)
-    else:
-        filtered = {k: v for k, v in category_counts.items() if k != "未分类"}
-        dominant_cat = max(filtered, key=filtered.get) if filtered else "未分类"
+    tone = compute_sentiment_tone(posts)
 
-    dominant_count = category_counts[dominant_cat]
-    concentration_ratio = dominant_count / total
-
-    # ---------- 3. 评分公式（密度制 + 固定保底） ----------
-    # 核心：所有分数基于"比例"而非"绝对数量"，确保 30 条和 300 条同比例同分
     high_ratio = high_count / total
     medium_ratio = medium_count / total
     extreme_ratio = extreme_neg_count / total
     slight_ratio = slight_neg_count / total
 
-    # 3.1 风险密度分（封顶约 45 分）
     density_score = (
-        high_ratio * 150 +      # high 密度权重最高
-        medium_ratio * 80 +     # medium 次之
-        extreme_ratio * 60 +    # 强烈负面情感密度
-        slight_ratio * 15       # 轻微负面情感密度
+        high_ratio * 150
+        + medium_ratio * 80
+        + extreme_ratio * 60
+        + slight_ratio * 15
     )
 
-    # 3.2 典型事件保底（固定值，不随数量膨胀）
-    # 只要出现 high，说明已触及红线，+20 保底
     typical_bonus = 20 if high_count > 0 else 0
 
-    # 3.3 传播集中度加成（基于比例，自然与总量无关）
     concentration_bonus = 0.0
-    if category_weight(dominant_cat) > 0 and concentration_ratio >= 0.10:
-        concentration_bonus = min(10.0, (concentration_ratio - 0.10) * 100)
+    if category_weight_for_scoring(alert_cat) > 0 and concentration_ratio >= 0.10:
+        alert_share = alert_count / total if total else 0.0
+        concentration_bonus = min(10.0, max(0.0, (alert_share - 0.05) * 80))
 
     total_score = min(100.0, density_score + typical_bonus + concentration_bonus)
 
-    # ---------- 4. 贡献度明细 ----------
     contributions = []
     for cat, count in sorted(category_counts.items(), key=lambda x: x[1], reverse=True):
-        w = category_weight(cat)
-        level = "high" if w >= 3 else "medium" if w >= 2 else "medium" if w == 1 else "low"
+        cat_high = sum(
+            1
+            for p in posts
+            if p.get("risk_category") == cat and p.get("risk_level") == "high"
+        )
+        cat_medium = sum(
+            1
+            for p in posts
+            if p.get("risk_category") == cat and p.get("risk_level") == "medium"
+        )
+        cat_extreme = sum(
+            1
+            for p in posts
+            if p.get("risk_category") == cat and p.get("sentiment") == "强烈负面"
+        )
+        cat_slight = sum(
+            1
+            for p in posts
+            if p.get("risk_category") == cat and p.get("sentiment") == "轻微负面"
+        )
 
-        # 该类别对总分的贡献（按密度反推，用于展示）
-        score_contrib = 0
-        cat_high = sum(1 for p in posts if p.get("risk_category") == cat and p.get("risk_level") == "high")
-        cat_medium = sum(1 for p in posts if p.get("risk_category") == cat and p.get("risk_level") == "medium")
-        cat_extreme = sum(1 for p in posts if p.get("risk_category") == cat and p.get("sentiment") == "强烈负面")
-        cat_slight = sum(1 for p in posts if p.get("risk_category") == cat and p.get("sentiment") == "轻微负面")
+        if cat_high > 0:
+            level = "high"
+        elif cat_medium > 0:
+            level = "medium"
+        else:
+            level = "low"
 
-        score_contrib += (cat_high / total) * 150
-        score_contrib += (cat_medium / total) * 80
-        score_contrib += (cat_extreme / total) * 60
-        score_contrib += (cat_slight / total) * 15
+        score_contrib = (
+            (cat_high / total) * 150
+            + (cat_medium / total) * 80
+            + (cat_extreme / total) * 60
+            + (cat_slight / total) * 15
+        )
 
         contributions.append({
             "category": cat,
@@ -142,11 +130,21 @@ def run_warner(input_path: Path) -> Path:
         })
 
     risk_level = classify_risk(total_score)
-    trend = build_trend(total_score, high_count, dominant_cat)
-
-    # ---------- 5. 输出 ----------
     neg_total = extreme_neg_count + slight_neg_count
     negative_rate = round(neg_total / total, 4) if total else 0.0
+
+    high_summary = summarize_high_risk_categories(posts)
+    trend = build_trend(
+        total_score,
+        high_count,
+        medium_count,
+        dominant_cat,
+        concentration_ratio,
+        negative_rate,
+        tone["tone_label"],
+        total,
+        alert_focus=alert_cat,
+    )
 
     output = {
         "meta": {
@@ -159,14 +157,31 @@ def run_warner(input_path: Path) -> Path:
             "extreme_negative_count": extreme_neg_count,
             "negative_count": neg_total,
             "negative_rate": negative_rate,
+            "positive_count": tone["positive_count"],
+            "sentiment_tone": tone["tone_label"],
+            "sample_caveat": total < 30,
+            "high_risk_summary": high_summary["summary"],
+            "high_risk_has_sensitive": high_summary["has_sensitive"],
         },
         "total_score": round(total_score, 2),
         "risk_level": risk_level,
         "dominant_risk": dominant_cat,
+        "alert_focus": alert_cat,
         "dominant_contribution": {
             "count": dominant_count,
             "ratio": round(concentration_ratio, 4),
-            "description": f"{dominant_count} 条微博涉及 {dominant_cat}，占总样本 {concentration_ratio:.1%}",
+            "description": (
+                f"{dominant_count} 条微博涉及 {dominant_cat}，"
+                f"占总样本 {concentration_ratio:.1%}"
+            ),
+        },
+        "alert_focus_contribution": {
+            "count": alert_count,
+            "description": (
+                f"中高风险条目最多的类别为 {alert_cat}（{alert_count} 条）"
+                if alert_count
+                else "暂无中高风险集中类别"
+            ),
         },
         "category_breakdown": contributions,
         "entity_counts": entity_counts,
@@ -179,7 +194,12 @@ def run_warner(input_path: Path) -> Path:
         json.dump(output, f, ensure_ascii=False, indent=2)
 
     print(f"预警评分完成，总分 {total_score:.2f}，等级 {risk_level}")
-    print(f"主导风险: {dominant_cat} ({dominant_count}/{total}, {concentration_ratio:.1%})")
+    print(
+        f"主导话题(按量): {dominant_cat} ({dominant_count}/{total}, "
+        f"{concentration_ratio:.1%})"
+    )
+    if alert_cat != dominant_cat:
+        print(f"风险焦点: {alert_cat} ({alert_count} 条中高风险)")
     print(f"结果已写入: {output_path}")
     return output_path
 

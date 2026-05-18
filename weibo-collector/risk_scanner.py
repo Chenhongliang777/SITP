@@ -5,6 +5,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from utils.analysis_helpers import (
+    CANONICAL_RISK_CATEGORIES,
+    canonicalize_risk_category,
+    reconcile_sentiment_with_absa,
+)
 from utils.llm_client import try_llm_client
 from utils.runtime import get_llm_batch_size, get_llm_max_workers
 
@@ -30,10 +35,10 @@ def determine_risk_llm(post: dict, client) -> Optional[Dict[str, Any]]:
         "你是一个足球舆情风险判定专家。请根据微博内容、主题标签和方面级情感，"
         "动态生成最贴切的风险类别和风险等级。\n"
         "规则：\n"
-        "1. risk_category 自由命名，必须体现具体方向，如："
-        "'裁判争议风险'、'德比冲突风险'、'球员舆论'、'青训舆论'、"
-        "'草皮舆论'、'转播服务舆论'、'赛程舆论'、'球迷冲突风险'、'敏感事件'等。"
-        "禁止输出泛泛的'负面舆情''一般舆情'，必须带具体主题或'风险'后缀。\n"
+        "1. risk_category 优先从以下标准类复用（不要为每条微博发明新类名）："
+        + "、".join(CANONICAL_RISK_CATEGORIES)
+        + "。仅在确实无法归类时再新建，且须带具体主题或'风险/舆论'后缀。\n"
+        "禁止输出泛泛的'负面舆情''一般舆情'。\n"
         "2. risk_level：high / medium / low\n"
         "   - high：假球、黑哨、赌球、操纵比赛、赛场暴力、球迷骚乱、群体性事件。\n"
         "   - medium：裁判争议（VAR/漏判/错判）且情感负面；"
@@ -77,7 +82,7 @@ def _normalize_risk_dict(result: Any) -> Optional[Dict[str, Any]]:
 
     return {
         "risk_level": result["risk_level"],
-        "risk_category": cat,
+        "risk_category": canonicalize_risk_category(cat),
         "risk_entities": [str(e) for e in result["risk_entities"]],
     }
 
@@ -100,8 +105,9 @@ def determine_risk_llm_batch(batch: List[Tuple[int, dict]], client) -> Optional[
     system_prompt = (
         "你是足球舆情风险判定专家。输入多段，每段以「[整数id]」开头，含正文/情感/主题/方面级情感。"
         "请为每个 id 输出一条风险判定。输出 JSON 对象，仅含 results 数组；"
-        "每项含 id（整数）与 risk_level（high/medium/low）、risk_category（具体方向+风险/舆论后缀，"
-        "禁止泛泛的负面舆情/一般舆情）、risk_entities（字符串数组）。"
+        "每项含 id（整数）与 risk_level（high/medium/low）、risk_category（优先复用标准类："
+        + "、".join(CANONICAL_RISK_CATEGORIES)
+        + "，禁止泛泛的负面舆情/一般舆情）、risk_entities（字符串数组）。"
         "必须覆盖每一个输入 id，不要遗漏。"
     )
     max_tokens = min(4096, 100 + 110 * len(batch))
@@ -205,7 +211,7 @@ def determine_risk_rule(post: dict):
 
     return {
         "risk_level": level,
-        "risk_category": category,
+        "risk_category": canonicalize_risk_category(category),
         "risk_entities": sorted(risk_entities),
     }
 
@@ -263,6 +269,9 @@ def run_risk_scan(input_path: Path, use_llm: bool = True) -> Path:
     high_count = 0
     medium_count = 0
     low_count = 0
+
+    for post in posts:
+        reconcile_sentiment_with_absa(post)
 
     rule_base: List[Dict[str, Any]] = []
     for post in posts:

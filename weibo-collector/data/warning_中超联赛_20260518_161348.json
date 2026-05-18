@@ -1,0 +1,117 @@
+{
+  "meta": {
+    "keyword": "中超联赛",
+    "date_range": "2026-05-11 to 2026-05-18",
+    "actual": 43,
+    "high_risk_count": 0,
+    "medium_risk_count": 8,
+    "low_risk_count": 35,
+    "extreme_negative_count": 5,
+    "negative_count": 15,
+    "negative_rate": 0.3488,
+    "positive_count": 28,
+    "sentiment_tone": "偏正面",
+    "sample_caveat": false,
+    "high_risk_summary": "无",
+    "high_risk_has_sensitive": false
+  },
+  "total_score": 25.35,
+  "risk_level": "low",
+  "dominant_risk": "球队表现舆论",
+  "alert_focus": "球队表现舆论",
+  "dominant_contribution": {
+    "count": 20,
+    "ratio": 0.4651,
+    "description": "20 条微博涉及 球队表现舆论，占总样本 46.5%"
+  },
+  "alert_focus_contribution": {
+    "count": 6,
+    "description": "中高风险条目最多的类别为 球队表现舆论（6 条）"
+  },
+  "category_breakdown": [
+    {
+      "category": "球队表现舆论",
+      "count": 20,
+      "ratio": 0.4651,
+      "risk_level": "medium",
+      "score_contribution": 18.14
+    },
+    {
+      "category": "球迷文化舆论",
+      "count": 11,
+      "ratio": 0.2558,
+      "risk_level": "low",
+      "score_contribution": 1.05
+    },
+    {
+      "category": "赛程密集舆论",
+      "count": 6,
+      "ratio": 0.1395,
+      "risk_level": "low",
+      "score_contribution": 0.35
+    },
+    {
+      "category": "裁判争议风险",
+      "count": 3,
+      "ratio": 0.0698,
+      "risk_level": "medium",
+      "score_contribution": 2.21
+    },
+    {
+      "category": "青训舆论",
+      "count": 2,
+      "ratio": 0.0465,
+      "risk_level": "medium",
+      "score_contribution": 3.6
+    },
+    {
+      "category": "保级形势舆论",
+      "count": 1,
+      "ratio": 0.0233,
+      "risk_level": "low",
+      "score_contribution": 0.0
+    }
+  ],
+  "entity_counts": {
+    "夏窗": 1,
+    "山东泰山": 2,
+    "浙江队": 2,
+    "客场表现": 1,
+    "心理劣势": 1,
+    "河南队": 2,
+    "津门虎": 2,
+    "保级形势": 1,
+    "卡纳瓦罗": 1,
+    "留洋": 1,
+    "里皮": 1,
+    "韦世豪": 1,
+    "信任危机": 1,
+    "深圳新鹏城": 1,
+    "陈涛": 1,
+    "一周双赛": 1,
+    "连续客场": 1,
+    "甘树然": 1,
+    "裁判争议": 1,
+    "上海海港": 2,
+    "伤病": 1,
+    "成都蓉城": 2,
+    "球迷": 1,
+    "重庆铜梁龙": 4,
+    "世界杯": 1,
+    "中超": 1,
+    "国足": 1,
+    "武汉三镇": 2,
+    "苏亚雷斯": 2,
+    "上海申花": 3,
+    "云南玉昆": 2,
+    "海港": 1,
+    "山东鲁能泰山": 1,
+    "伤病潮": 2,
+    "抽奖活动": 1,
+    "门票转让": 1,
+    "客场失利": 1,
+    "青岛球迷": 1
+  },
+  "trend_description": "舆情总体平稳，以常规跟踪为主。",
+  "generated_at": "2026-05-18T16:13:48.148398"
+}

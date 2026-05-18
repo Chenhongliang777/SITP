@@ -1,0 +1,122 @@
+{
+  "meta": {
+    "keyword": "中超联赛",
+    "date_range": "2026-05-11 to 2026-05-18",
+    "actual": 18,
+    "high_risk_count": 0,
+    "medium_risk_count": 5,
+    "low_risk_count": 13,
+    "extreme_negative_count": 3,
+    "negative_count": 7,
+    "negative_rate": 0.3889,
+    "positive_count": 11,
+    "sentiment_tone": "偏正面",
+    "sample_caveat": true,
+    "high_risk_summary": "无",
+    "high_risk_has_sensitive": false
+  },
+  "total_score": 40.44,
+  "risk_level": "medium",
+  "dominant_risk": "中超联赛记者舆论",
+  "alert_focus": "中超联赛记者风险",
+  "dominant_contribution": {
+    "count": 5,
+    "ratio": 0.2778,
+    "description": "5 条微博涉及 中超联赛记者舆论，占总样本 27.8%"
+  },
+  "alert_focus_contribution": {
+    "count": 2,
+    "description": "中高风险条目最多的类别为 中超联赛记者风险（2 条）"
+  },
+  "category_breakdown": [
+    {
+      "category": "中超联赛记者舆论",
+      "count": 5,
+      "ratio": 0.2778,
+      "risk_level": "low",
+      "score_contribution": 0.0
+    },
+    {
+      "category": "中超联赛第1舆论",
+      "count": 4,
+      "ratio": 0.2222,
+      "risk_level": "low",
+      "score_contribution": 0.0
+    },
+    {
+      "category": "中超联赛超话舆论",
+      "count": 2,
+      "ratio": 0.1111,
+      "risk_level": "low",
+      "score_contribution": 0.83
+    },
+    {
+      "category": "中超联赛记者风险",
+      "count": 2,
+      "ratio": 0.1111,
+      "risk_level": "medium",
+      "score_contribution": 10.56
+    },
+    {
+      "category": "中超联赛第1风险",
+      "count": 1,
+      "ratio": 0.0556,
+      "risk_level": "medium",
+      "score_contribution": 7.78
+    },
+    {
+      "category": "津门虎站在十风险",
+      "count": 1,
+      "ratio": 0.0556,
+      "risk_level": "medium",
+      "score_contribution": 7.78
+    },
+    {
+      "category": "美加墨世界杯舆论",
+      "count": 1,
+      "ratio": 0.0556,
+      "risk_level": "low",
+      "score_contribution": 0.0
+    },
+    {
+      "category": "津门虎站在十舆论",
+      "count": 1,
+      "ratio": 0.0556,
+      "risk_level": "low",
+      "score_contribution": 0.83
+    },
+    {
+      "category": "美加墨世界杯风险",
+      "count": 1,
+      "ratio": 0.0556,
+      "risk_level": "medium",
+      "score_contribution": 7.78
+    }
+  ],
+  "entity_counts": {
+    "客场": 3,
+    "中超": 2,
+    "主场": 1,
+    "古斯塔": 1,
+    "和纳萨": 1,
+    "本赛季": 1,
+    "沃和姆": 1,
+    "纳萨": 1,
+    "进攻": 1,
+    "钟义浩": 1,
+    "防守": 1,
+    "马虎": 1,
+    "连胜": 1,
+    "武磊": 1,
+    "韦世豪": 1,
+    "比赛": 1,
+    "陈涛": 1,
+    "孙杨": 1,
+    "易立竞": 1,
+    "国足": 1,
+    "寒冰": 1,
+    "朴镇燮": 1
+  },
+  "trend_description": "整体风险中等，主要讨论围绕「中超联赛记者舆论」（约 28%），另有 5 条中风险内容，情绪基调偏正面，保持监测即可。（样本量较小，以下判断仅供参考）",
+  "generated_at": "2026-05-18T16:19:37.987826"
+}
