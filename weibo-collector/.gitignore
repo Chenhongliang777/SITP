@@ -1,0 +1,16 @@
+/vendor/
+/dist/CSLSentinel/
+/dist/*.exe
+/build/
+dist.zip
+*.spec.bak
+__pycache__/
+.pytest_cache/
+.pytest-cache*/
+.env
+data/*
+!data/.gitkeep
+reports/*
+!reports/.gitkeep
+logs/*
+!logs/.gitkeep

@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, List, Optional
 
-from app.paths import get_data_dir, get_reports_dir, get_weibo_collector_dir
+from app.paths import get_data_dir, get_reports_dir, get_script_path, get_weibo_collector_dir
 from app.reports_util import find_latest_file
 from app.subprocess_io import decode_subprocess_line, subprocess_env
 
@@ -70,15 +70,20 @@ def _log(msg: str, log_fn: LogFn) -> None:
         print(msg)
 
 
+def _build_step_command(script_path: Path, args: list) -> list:
+    if getattr(sys, "frozen", False):
+        return [sys.executable, "--run-script", script_path.name] + args
+    return [sys.executable, str(script_path)] + args
+
+
 def _build_steps():
-    script_dir = get_weibo_collector_dir()
     data_dir = get_data_dir()
     report_dir = get_reports_dir()
 
     return [
         {
           "name": "collector",
-          "script": script_dir / "collector_backend.py",
+          "script": get_script_path("collector_backend.py"),
           "output_prefix": "raw",
           "ext": "json",
           "needs_input": False,
@@ -98,7 +103,7 @@ def _build_steps():
       },
       {
           "name": "preprocess",
-          "script": script_dir / "preprocess.py",
+          "script": get_script_path("preprocess.py"),
           "output_prefix": "deduped",
           "ext": "json",
           "needs_input": True,
@@ -114,7 +119,7 @@ def _build_steps():
       },
       {
           "name": "analysis_chain",
-          "script": script_dir / "analysis_chain.py",
+          "script": get_script_path("analysis_chain.py"),
           "output_prefix": "warning",
           "ext": "json",
           "needs_input": True,
@@ -136,7 +141,7 @@ def _build_steps():
       },
       {
           "name": "report_html",
-          "script": script_dir / "report_html.py",
+          "script": get_script_path("report_html.py"),
           "output_prefix": "report",
           "ext": "html",
           "needs_input": False,
@@ -206,7 +211,7 @@ def run_step(
     else:
         args = step["build_args"](ctx, None)
 
-    cmd = [sys.executable, str(script_path)] + args
+    cmd = _build_step_command(script_path, args)
     _log(f"▶ 步骤 [{name}] 启动", log_fn)
     _log(f"   {' '.join(cmd)[:200]}", log_fn)
 

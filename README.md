@@ -6,7 +6,7 @@
 weibo-collector/
 ├── launcher.py              # 统一启动器 + `python launcher.py login` 保存微博登录态
 ├── collector_backend.py     # 采集：Playwright + 多链路抓取
-├── preprocess.py            # 预处理：时间清洗 + 去重（逻辑内联于本文件，无独立 time_cleaner/deduper）
+├── preprocess.py            # 预处理：时间清洗 + 去重（单文件内联实现）
 ├── analysis_chain.py        # 分析链：语义过滤 → 情感 → 主题 → ABSA → 风险 → 预警（单进程串联）
 ├── report_html.py           # HTML 研判报告
 ├── semantic_filter.py       # 语义过滤（sentence-transformers，可选 LLM 灰区）
@@ -20,7 +20,7 @@ weibo-collector/
 ├── utils/
 │   ├── llm_client.py        # LLM HTTP 封装（OpenAI 兼容）
 │   ├── runtime.py           # 并发、批大小等运行时参数
-│   └── embedder.py          # 远端向量（可选，主流程语义模块用本地模型）
+│   └── analysis_helpers.py  # 分析链辅助（主导话题、趋势等）
 ├── data/                    # 中间 JSON 与登录态
 ├── reports/                 # 最终 HTML
 └── logs/                    # 采集日志
@@ -169,6 +169,40 @@ python launcher.py --keyword "中超" --start-date 2026-04-28 --end-date 2026-04
 ```
 
 **说明**：开启 `--efficient` 且未加 `--no-sentiment-llm-fallback` 时，**情感仍以本地模型为主**；仅当批量/单条推理失败时仍可能触发 **LLM 回退**。超长文本已在 `sentiment_model.py` 中按模型上限截断，以降低失败率。环境变量 `SEMANTIC_ENCODE_BATCH`、`SENTIMENT_BATCH`（见 `utils/runtime.py`）可微调本地批大小，可与上述参数叠加。
+
+## 5. Windows 安装包（M3）
+
+面向**未安装 Python** 的用户：下载 `CSLSentinel_Setup.exe`（或绿色版文件夹 `dist/CSLSentinel/`），双击 **`CSLSentinel.exe`** 即可打开 GUI。
+
+| 项目 | 说明 |
+|------|------|
+| 系统 | 仅支持 **Windows 10/11 64 位** |
+| 体积 | 约 **4～8 GB**（含 PyTorch、语义/情感模型、Chromium） |
+| 首次使用 | 自动创建 `data/`、`reports/`、`.env`；在 GUI「设置」填 **API Key**，在「微博登录」扫码 |
+| 离线模型 | 安装目录下 `vendor/models`、`vendor/browsers`（构建时预下载） |
+| 手机访问 | 与开发态相同：GUI「手机访问」→ 局域网 H5 |
+
+**维护者在本机构建（需 Python 3.10+、联网、约 30～60 分钟）：**
+
+```powershell
+cd weibo-collector
+powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1
+```
+
+产物：
+
+- 安装包：`weibo-collector/dist/CSLSentinel_Setup.exe`（推荐分发）
+- 绿色版：执行 `build_windows.ps1` 后生成 `dist/CSLSentinel/`（体积大，一般不必入库）
+
+仅重打 exe、已存在 `vendor/` 时：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging\build_windows.ps1 -SkipVendor
+```
+
+用户说明见安装目录内 **`使用说明.txt`**。
+
+**勿把 `vendor/`、`dist/CSLSentinel/`、`dist.zip` 推送到 GitHub**（体积过大，易超过 2GB 限制）。分发安装包请用 [GitHub Releases](https://docs.github.com/zh/repositories/releasing-projects-on-github/managing-releases-in-a-repository) 上传 `CSLSentinel_Setup.exe`（约 1.5GB，单文件上限 2GB），或在 README 中附网盘链接。
 
 
 

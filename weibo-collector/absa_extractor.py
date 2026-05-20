@@ -9,7 +9,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from utils.llm_client import try_llm_client
 from utils.runtime import get_llm_batch_size, get_llm_max_workers
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
+from utils.project_root import get_project_root
+
+SCRIPT_DIR = get_project_root()
 DATA_DIR = SCRIPT_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
 

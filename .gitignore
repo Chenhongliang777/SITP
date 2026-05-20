@@ -1,0 +1,21 @@
+# 运行时与构建产物（勿提交 vendor / 绿色版 dist 目录）
+weibo-collector/vendor/
+weibo-collector/dist/CSLSentinel/
+weibo-collector/build/
+# 安装包/压缩包体积 >100MB，不要进普通 git（见 README：用 GitHub Releases 或网盘）
+weibo-collector/dist.zip
+weibo-collector/dist/*.exe
+weibo-collector/.env
+weibo-collector/data/*
+!weibo-collector/data/.gitkeep
+weibo-collector/reports/*
+!weibo-collector/reports/.gitkeep
+weibo-collector/logs/*
+!weibo-collector/logs/.gitkeep
+
+__pycache__/
+.pytest_cache/
+*.pyc
+
+# 旧版实验目录（若误重建可忽略）
+代码+数据+分析结果/

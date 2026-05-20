@@ -19,7 +19,9 @@ from typing import Dict, List, Optional
 import requests
 from playwright.async_api import Page, async_playwright
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
+from utils.project_root import get_project_root
+
+SCRIPT_DIR = get_project_root()
 DATA_DIR = SCRIPT_DIR / "data"
 LOG_DIR = SCRIPT_DIR / "logs"
 STATE_FILE = DATA_DIR / "weibo_auth.json"

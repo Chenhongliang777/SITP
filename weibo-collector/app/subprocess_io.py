@@ -7,7 +7,10 @@ from typing import Dict, List
 
 
 def subprocess_env() -> Dict[str, str]:
+    from app.paths import get_weibo_collector_dir
+
     env = os.environ.copy()
+    env["CSL_SENTINEL_ROOT"] = str(get_weibo_collector_dir())
     env["PYTHONIOENCODING"] = "utf-8"
     env["PYTHONUTF8"] = "1"
     env["PYTHONUNBUFFERED"] = "1"

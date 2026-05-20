@@ -11,7 +11,9 @@ from dotenv import load_dotenv
 from utils.llm_client import try_llm_client
 from utils.runtime import get_llm_max_workers, get_sentiment_batch
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
+from utils.project_root import get_project_root
+
+SCRIPT_DIR = get_project_root()
 PROJECT_DIR = SCRIPT_DIR
 DATA_DIR = PROJECT_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -28,7 +30,10 @@ LABELS = [
     "强烈正面",
 ]
 
-PRETRAINED_MODEL = "lxyuan/distilbert-base-multilingual-cased-sentiments-student"
+PRETRAINED_MODEL = os.getenv(
+    "SENTIMENT_MODEL",
+    "lxyuan/distilbert-base-multilingual-cased-sentiments-student",
+)
 MODEL_MAX_LENGTH = 512
 INTENSITY_THRESHOLD = 0.70
 

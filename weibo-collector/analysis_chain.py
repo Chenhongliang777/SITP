@@ -9,7 +9,9 @@ import argparse
 import sys
 from pathlib import Path
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
+from utils.project_root import get_project_root
+
+SCRIPT_DIR = get_project_root()
 if str(SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(SCRIPT_DIR))
 

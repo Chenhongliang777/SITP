@@ -44,7 +44,17 @@ class SentinelApp(ctk.CTk):
         self.geometry("920x720")
         self.minsize(800, 640)
 
-        bootstrap()
+        if bootstrap():
+            self.after(
+                300,
+                lambda: messagebox.showinfo(
+                    "首次使用",
+                    "已生成配置文件 .env。\n\n"
+                    "请先在「设置」页填写大模型 API Key，再在「微博登录」页完成扫码登录，"
+                    "然后即可开始监测。\n\n"
+                    "手机访问请打开「手机访问」页并按提示操作。",
+                ),
+            )
         self._login = get_login_session()
         self._runner = get_pipeline_runner()
         self._last_report: Path | None = None

@@ -11,7 +11,9 @@ from utils.analysis_helpers import (
 )
 from utils.llm_client import try_llm_client
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
+from utils.project_root import get_project_root
+
+SCRIPT_DIR = get_project_root()
 DATA_DIR = SCRIPT_DIR / "data"
 REPORT_DIR = SCRIPT_DIR / "reports"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
