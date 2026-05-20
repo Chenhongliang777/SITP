@@ -5,8 +5,7 @@
     "target": 20,
     "actual": 20,
     "crawl_time": "2026-05-20T16:11:52.593903",
-    "source": "collector_backend",
-    "sample": 20
+    "source": "collector_backend"
   },
   "data": [
     {

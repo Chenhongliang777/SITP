@@ -1,0 +1,9 @@
+[16:10:55] 已加载登录态: D:\homework\创新创业项目\weibo-collector\data\weibo_auth.json
+[16:11:04] DOM主链路第1页，当前 0/20
+[16:11:20] 本页合计新增 10 条（其中 DOM 路径约 10 条）
+[16:11:23] DOM主链路第2页，当前 10/20
+[16:11:47] 本页合计新增 10 条（其中 DOM 路径约 10 条）
+[16:11:52] DOM主链路累计 20 条
+[16:11:52] 已输出: D:\homework\创新创业项目\weibo-collector\data\raw_中超联赛_20260520_161152.json
+[16:11:52] 已输出样例: D:\homework\创新创业项目\weibo-collector\data\raw_sample.json
+[16:11:52] clean_text 平均长度: 184.45

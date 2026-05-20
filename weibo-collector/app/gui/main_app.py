@@ -22,6 +22,12 @@ from app.pipeline_core import PipelineContext
 from app.pipeline_runner import get_pipeline_runner
 from app.reports_util import find_latest_report, open_report
 from app.gui.log_bridge import UiLogBridge
+from app.web.server import (
+    DEFAULT_PORT,
+    get_server_info,
+    start_lan_server,
+    stop_lan_server,
+)
 from app.weibo_login import get_login_session, is_login_file_present
 
 STEP_COUNT = 4
@@ -68,10 +74,12 @@ class SentinelApp(ctk.CTk):
 
         self.tab_run = self.tabs.add("监测任务")
         self.tab_login = self.tabs.add("微博登录")
+        self.tab_lan = self.tabs.add("手机访问")
         self.tab_settings = self.tabs.add("设置")
 
         self._build_run_tab()
         self._build_login_tab()
+        self._build_lan_tab()
         self._build_settings_tab()
 
     # —— 监测任务 ——
@@ -180,6 +188,80 @@ class SentinelApp(ctk.CTk):
 
         self.login_log = ctk.CTkTextbox(frame, height=180)
         self.login_log.pack(fill="both", expand=True, padx=16, pady=16)
+
+    # —— 手机访问（局域网 Web）——
+    def _build_lan_tab(self) -> None:
+        frame = ctk.CTkFrame(self.tab_lan)
+        frame.pack(fill="both", expand=True, padx=16, pady=16)
+
+        ctk.CTkLabel(
+            frame,
+            text="方案 A：家中 Windows 电脑跑全流程，手机浏览器通过局域网访问。",
+            wraplength=760,
+            justify="left",
+        ).pack(anchor="w", pady=(0, 12))
+
+        self.switch_lan = ctk.CTkSwitch(
+            frame,
+            text="允许局域网访问（手机与 PC 同一 WiFi）",
+            command=self._on_lan_switch,
+        )
+        self.switch_lan.pack(anchor="w", pady=8)
+
+        self.label_lan_url = ctk.CTkLabel(
+            frame, text="服务地址：（未开启）", font=ctk.CTkFont(size=14)
+        )
+        self.label_lan_url.pack(anchor="w", pady=6)
+
+        self.label_lan_token = ctk.CTkLabel(
+            frame, text="访问令牌：（开启后显示）", wraplength=760, justify="left"
+        )
+        self.label_lan_token.pack(anchor="w", pady=6)
+
+        ctk.CTkLabel(
+            frame,
+            text=(
+                "手机浏览器打开上述地址，填入令牌后即可下任务、看进度与报告。\n"
+                "微博扫码登录仍须在本机「微博登录」页完成。\n"
+                f"默认端口 {DEFAULT_PORT}；若无法访问，请在 Windows 防火墙允许专用网络入站。"
+            ),
+            text_color="gray",
+            wraplength=760,
+            justify="left",
+        ).pack(anchor="w", pady=12)
+
+        self._refresh_lan_labels()
+
+    def _refresh_lan_labels(self) -> None:
+        info = get_server_info()
+        if info.running:
+            self.switch_lan.select()
+            self.label_lan_url.configure(
+                text=f"服务地址：{info.phone_url}\n（本机 IP：{info.lan_ip}，端口 {info.port}）"
+            )
+            self.label_lan_token.configure(
+                text=f"访问令牌（手机 H5 首次需填写）：\n{info.token}"
+            )
+        else:
+            self.switch_lan.deselect()
+            self.label_lan_url.configure(text="服务地址：（未开启）")
+            self.label_lan_token.configure(text="访问令牌：（开启后显示）")
+
+    def _on_lan_switch(self) -> None:
+        if self.switch_lan.get():
+            try:
+                start_lan_server()
+                self._refresh_lan_labels()
+                messagebox.showinfo(
+                    "手机访问",
+                    "局域网服务已开启。请用手机浏览器打开显示的地址，并填入访问令牌。",
+                )
+            except Exception as e:
+                self.switch_lan.deselect()
+                messagebox.showerror("手机访问", str(e))
+        else:
+            stop_lan_server()
+            self._refresh_lan_labels()
 
     # —— 设置 ——
     def _build_settings_tab(self) -> None:

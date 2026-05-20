@@ -1,0 +1,95 @@
+{
+  "meta": {
+    "keyword": "中超联赛",
+    "date_range": "2026-05-20 to 2026-05-20",
+    "actual": 17,
+    "high_risk_count": 0,
+    "medium_risk_count": 2,
+    "low_risk_count": 15,
+    "extreme_negative_count": 2,
+    "negative_count": 6,
+    "negative_rate": 0.3529,
+    "positive_count": 10,
+    "sentiment_tone": "偏正面",
+    "sample_caveat": true,
+    "high_risk_summary": "无",
+    "high_risk_has_sensitive": false
+  },
+  "total_score": 20.71,
+  "risk_level": "low",
+  "dominant_risk": "中超联赛超话舆论",
+  "alert_focus": "的权力训话风险",
+  "dominant_contribution": {
+    "count": 5,
+    "ratio": 0.2941,
+    "description": "5 条微博涉及 中超联赛超话舆论，占总样本 29.4%"
+  },
+  "alert_focus_contribution": {
+    "count": 1,
+    "description": "中高风险条目最多的类别为 的权力训话风险（1 条）"
+  },
+  "category_breakdown": [
+    {
+      "category": "中超联赛超话舆论",
+      "count": 5,
+      "ratio": 0.2941,
+      "risk_level": "low",
+      "score_contribution": 0.88
+    },
+    {
+      "category": "中超联赛中超舆论",
+      "count": 4,
+      "ratio": 0.2353,
+      "risk_level": "low",
+      "score_contribution": 0.88
+    },
+    {
+      "category": "的权力训话舆论",
+      "count": 2,
+      "ratio": 0.1176,
+      "risk_level": "low",
+      "score_contribution": 0.88
+    },
+    {
+      "category": "现场气氛不输舆论",
+      "count": 2,
+      "ratio": 0.1176,
+      "risk_level": "low",
+      "score_contribution": 3.53
+    },
+    {
+      "category": "徐亮微博二创舆论",
+      "count": 2,
+      "ratio": 0.1176,
+      "risk_level": "low",
+      "score_contribution": 0.0
+    },
+    {
+      "category": "的权力训话风险",
+      "count": 1,
+      "ratio": 0.0588,
+      "risk_level": "medium",
+      "score_contribution": 8.24
+    },
+    {
+      "category": "中超联赛中超风险",
+      "count": 1,
+      "ratio": 0.0588,
+      "risk_level": "medium",
+      "score_contribution": 5.59
+    }
+  ],
+  "entity_counts": {
+    "球员": 1,
+    "球迷": 2,
+    "上赛季": 1,
+    "凤凰": 1,
+    "张玉宁": 1,
+    "法比奥": 1,
+    "于根伟": 1,
+    "中超": 1,
+    "比赛": 1
+  },
+  "trend_description": "舆情总体平稳，以常规跟踪为主。（样本量较小，以下判断仅供参考）",
+  "generated_at": "2026-05-20T16:12:34.901000"
+}

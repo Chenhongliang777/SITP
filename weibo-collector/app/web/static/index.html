@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+  <title>CSL Sentinel · 手机监测</title>
+  <style>
+    :root {
+      --bg: #f3f4f6;
+      --card: #fff;
+      --primary: #2563eb;
+      --text: #111827;
+      --muted: #6b7280;
+      --danger: #dc2626;
+      --ok: #059669;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    header {
+      background: linear-gradient(135deg, #1d4ed8, #2563eb);
+      color: #fff;
+      padding: 16px;
+      text-align: center;
+    }
+    header h1 { margin: 0; font-size: 1.1rem; }
+    header p { margin: 6px 0 0; font-size: 0.85rem; opacity: 0.9; }
+    nav {
+      display: flex;
+      background: var(--card);
+      border-bottom: 1px solid #e5e7eb;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+    nav button {
+      flex: 1;
+      border: none;
+      background: none;
+      padding: 12px 8px;
+      font-size: 0.95rem;
+      color: var(--muted);
+    }
+    nav button.active {
+      color: var(--primary);
+      border-bottom: 2px solid var(--primary);
+      font-weight: 600;
+    }
+    main { padding: 12px; max-width: 640px; margin: 0 auto; }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .card {
+      background: var(--card);
+      border-radius: 12px;
+      padding: 14px;
+      margin-bottom: 12px;
+      box-shadow: 0 1px 3px rgba(0,0,0,.06);
+    }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin: 8px 0 4px; }
+    input, select {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid #d1d5db;
+      border-radius: 8px;
+      font-size: 1rem;
+    }
+    .row { display: flex; gap: 8px; }
+    .row > * { flex: 1; }
+    button.primary {
+      width: 100%;
+      margin-top: 12px;
+      padding: 12px;
+      border: none;
+      border-radius: 10px;
+      background: var(--primary);
+      color: #fff;
+      font-size: 1rem;
+      font-weight: 600;
+    }
+    button.primary:disabled { opacity: 0.5; }
+    button.link {
+      width: 100%;
+      margin-top: 8px;
+      padding: 10px;
+      border: 1px solid var(--primary);
+      border-radius: 10px;
+      background: #eff6ff;
+      color: var(--primary);
+      font-size: 0.95rem;
+    }
+    .progress-wrap {
+      height: 8px;
+      background: #e5e7eb;
+      border-radius: 4px;
+      overflow: hidden;
+      margin: 8px 0;
+    }
+    .progress-bar {
+      height: 100%;
+      background: var(--primary);
+      width: 0%;
+      transition: width 0.3s;
+    }
+    .log-box {
+      height: 200px;
+      overflow-y: auto;
+      background: #111827;
+      color: #e5e7eb;
+      font-family: ui-monospace, monospace;
+      font-size: 0.75rem;
+      padding: 8px;
+      border-radius: 8px;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 0.8rem; }
+    .badge.ok { background: #d1fae5; color: var(--ok); }
+    .badge.warn { background: #fef3c7; color: #b45309; }
+    .hint { font-size: 0.8rem; color: var(--muted); margin-top: 6px; }
+    .err { color: var(--danger); font-size: 0.9rem; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>足球舆情监测 · 手机端</h1>
+    <p>与家中 Windows 电脑同一 WiFi，由 PC 执行采集与分析</p>
+  </header>
+  <nav>
+    <button type="button" data-tab="run" class="active">监测</button>
+    <button type="button" data-tab="settings">设置</button>
+    <button type="button" data-tab="help">说明</button>
+  </nav>
+  <main>
+    <section id="panel-run" class="panel active">
+      <div class="card">
+        <label>访问令牌（在 PC GUI「手机访问」页复制）</label>
+        <input id="token" type="password" placeholder="首次使用请填写" autocomplete="off" />
+        <button type="button" class="primary" id="btn-save-token" style="margin-top:8px">保存令牌</button>
+      </div>
+      <div class="card">
+        <p>微博登录：<span id="login-badge" class="badge warn">检查中…</span></p>
+        <label>搜索关键词</label>
+        <input id="keyword" value="中超联赛" />
+        <div class="row">
+          <div>
+            <label>开始日期</label>
+            <input id="start-date" type="date" />
+          </div>
+          <div>
+            <label>结束日期</label>
+            <input id="end-date" type="date" />
+          </div>
+        </div>
+        <label>目标条数</label>
+        <input id="target-count" type="number" min="1" max="500" value="80" />
+        <label style="display:flex;align-items:center;gap:8px;margin-top:12px;color:var(--text)">
+          <input id="efficient" type="checkbox" style="width:auto" /> 高效模式（少调 LLM）
+        </label>
+        <button type="button" class="primary" id="btn-start">开始监测</button>
+        <button type="button" class="link" id="btn-report" style="display:none">打开最新报告</button>
+        <p id="run-err" class="err" hidden></p>
+      </div>
+      <div class="card">
+        <p id="step-label">当前步骤：等待开始</p>
+        <div class="progress-wrap"><div class="progress-bar" id="progress-bar"></div></div>
+        <p class="hint" id="progress-pct">0%</p>
+        <div class="log-box" id="log-box"></div>
+      </div>
+    </section>
+
+    <section id="panel-settings" class="panel">
+      <div class="card">
+        <label>模型预设</label>
+        <select id="preset"></select>
+        <label>API Key（留空则保持原值）</label>
+        <input id="api-key" type="password" placeholder="不修改请留空" />
+        <label>Base URL（自定义预设）</label>
+        <input id="base-url" />
+        <label>Model</label>
+        <input id="model" />
+        <p class="hint" id="key-masked"></p>
+        <button type="button" class="primary" id="btn-save-settings">保存设置</button>
+        <p id="settings-err" class="err" hidden></p>
+      </div>
+    </section>
+
+    <section id="panel-help" class="panel">
+      <div class="card">
+        <h3 style="margin-top:0">使用步骤</h3>
+        <ol>
+          <li>在 Windows 电脑上打开 GUI，进入「手机访问」并开启局域网服务。</li>
+          <li>手机连接与电脑相同的 WiFi，浏览器打开显示的地址。</li>
+          <li>将 PC 上显示的<strong>访问令牌</strong>填入本页并保存。</li>
+          <li>微博登录请在 PC「微博登录」页扫码完成；手机仅查看状态。</li>
+          <li>填写关键词与日期后「开始监测」，进度与日志会自动刷新。</li>
+        </ol>
+        <p class="hint">若无法访问，请在 Windows 防火墙中允许专用网络入站（端口默认 8765）。</p>
+      </div>
+    </section>
+  </main>
+  <script>
+    const TOKEN_KEY = "csl_lan_token";
+    let pollTimer = null;
+
+    function $(id) { return document.getElementById(id); }
+
+    function getToken() {
+      return ($("token").value || localStorage.getItem(TOKEN_KEY) || "").trim();
+    }
+
+    function saveToken() {
+      const t = $("token").value.trim();
+      if (!t) { alert("请填写令牌"); return; }
+      localStorage.setItem(TOKEN_KEY, t);
+      alert("令牌已保存");
+      refreshLogin();
+      loadSettings();
+    }
+
+    async function api(path, opts = {}) {
+      const headers = Object.assign({ "Content-Type": "application/json" }, opts.headers || {});
+      const token = getToken();
+      if (token) headers["X-Access-Token"] = token;
+      const res = await fetch("/api" + path, Object.assign({}, opts, { headers }));
+      let data = {};
+      try { data = await res.json(); } catch (_) {}
+      if (!res.ok) {
+        const msg = data.detail || data.message || res.statusText;
+        throw new Error(typeof msg === "string" ? msg : JSON.stringify(msg));
+      }
+      return data;
+    }
+
+    function setDefaultDates() {
+      const end = new Date();
+      const start = new Date();
+      start.setDate(end.getDate() - 7);
+      const fmt = (d) => d.toISOString().slice(0, 10);
+      $("start-date").value = fmt(start);
+      $("end-date").value = fmt(end);
+    }
+
+    function switchTab(name) {
+      document.querySelectorAll("nav button").forEach((b) => {
+        b.classList.toggle("active", b.dataset.tab === name);
+      });
+      document.querySelectorAll(".panel").forEach((p) => {
+        p.classList.toggle("active", p.id === "panel-" + name);
+      });
+    }
+
+    document.querySelectorAll("nav button").forEach((b) => {
+      b.addEventListener("click", () => switchTab(b.dataset.tab));
+    });
+
+    function updateLoginBadge(ok) {
+      const el = $("login-badge");
+      if (ok) {
+        el.textContent = "已登录";
+        el.className = "badge ok";
+      } else {
+        el.textContent = "未登录 · 请在 PC 操作";
+        el.className = "badge warn";
+      }
+    }
+
+    function renderStatus(s) {
+      const pct = Math.round((s.progress || 0) * 100);
+      $("progress-bar").style.width = pct + "%";
+      $("progress-pct").textContent = pct + "%";
+      $("step-label").textContent = "当前步骤：" + (s.step_label || "—");
+      const logs = (s.logs || []).join("\n");
+      $("log-box").textContent = logs || "（暂无日志）";
+      $("log-box").scrollTop = $("log-box").scrollHeight;
+      updateLoginBadge(s.login_ok);
+      const busy = s.running || s.pipeline_busy;
+      $("btn-start").disabled = busy;
+      if (s.report_path && !s.running) {
+        $("btn-report").style.display = "block";
+      }
+      if (s.error) {
+        $("run-err").hidden = false;
+        $("run-err").textContent = s.error;
+      } else if (!s.running) {
+        $("run-err").hidden = true;
+      }
+      if (busy && !pollTimer) startPoll();
+      if (!busy && pollTimer) stopPoll();
+    }
+
+    async function refreshStatus() {
+      try {
+        const s = await api("/status");
+        renderStatus(s);
+      } catch (e) {
+        $("run-err").hidden = false;
+        $("run-err").textContent = e.message;
+      }
+    }
+
+    function startPoll() {
+      if (pollTimer) return;
+      pollTimer = setInterval(refreshStatus, 2000);
+    }
+
+    function stopPoll() {
+      if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+
+    async function refreshLogin() {
+      try {
+        const s = await api("/login/status");
+        updateLoginBadge(s.logged_in);
+      } catch (_) {
+        updateLoginBadge(false);
+      }
+    }
+
+    async function loadSettings() {
+      try {
+        const s = await api("/settings");
+        const sel = $("preset");
+        sel.innerHTML = "";
+        (s.presets || []).forEach((p) => {
+          const o = document.createElement("option");
+          o.value = p.id;
+          o.textContent = p.label;
+          if (p.id === s.preset_id) o.selected = true;
+          sel.appendChild(o);
+        });
+        $("base-url").value = s.base_url || "";
+        $("model").value = s.model || "";
+        $("key-masked").textContent = s.has_api_key
+          ? "当前 Key：" + (s.api_key_masked || "已配置")
+          : "尚未配置 API Key";
+      } catch (e) {
+        $("settings-err").hidden = false;
+        $("settings-err").textContent = e.message;
+      }
+    }
+
+    async function saveSettings() {
+      $("settings-err").hidden = true;
+      try {
+        await api("/settings", {
+          method: "PUT",
+          body: JSON.stringify({
+            preset_id: $("preset").value,
+            api_key: $("api-key").value,
+            base_url: $("base-url").value || null,
+            model: $("model").value || null,
+          }),
+        });
+        $("api-key").value = "";
+        alert("设置已保存");
+        loadSettings();
+      } catch (e) {
+        $("settings-err").hidden = false;
+        $("settings-err").textContent = e.message;
+      }
+    }
+
+    async function startRun() {
+      $("run-err").hidden = true;
+      if (!getToken()) {
+        alert("请先保存访问令牌");
+        return;
+      }
+      const body = {
+        keyword: $("keyword").value.trim(),
+        start_date: $("start-date").value,
+        end_date: $("end-date").value,
+        target_count: parseInt($("target-count").value, 10) || 80,
+        efficient: $("efficient").checked,
+      };
+      if (!body.keyword) { alert("请填写关键词"); return; }
+      try {
+        await api("/run", { method: "POST", body: JSON.stringify(body) });
+        $("btn-report").style.display = "none";
+        startPoll();
+        refreshStatus();
+      } catch (e) {
+        $("run-err").hidden = false;
+        $("run-err").textContent = e.message;
+      }
+    }
+
+    async function openReport() {
+      const kw = $("keyword").value.trim();
+      const token = getToken();
+      if (!kw || !token) {
+        alert("请填写关键词并保存令牌");
+        return;
+      }
+      try {
+        const r = await api("/report/latest?keyword=" + encodeURIComponent(kw));
+        const sep = r.open_url.includes("?") ? "&" : "?";
+        window.open(r.open_url + sep + "access_token=" + encodeURIComponent(token), "_blank");
+      } catch (e) {
+        alert(e.message);
+      }
+    }
+
+    $("btn-save-token").addEventListener("click", saveToken);
+    $("btn-start").addEventListener("click", startRun);
+    $("btn-save-settings").addEventListener("click", saveSettings);
+    $("btn-report").addEventListener("click", openReport);
+
+    const saved = localStorage.getItem(TOKEN_KEY);
+    if (saved) $("token").value = saved;
+    setDefaultDates();
+    refreshLogin();
+    refreshStatus();
+    if (getToken()) loadSettings();
+  </script>
+</body>
+</html>
